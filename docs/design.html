@@ -1,0 +1,773 @@
+<title>potatomaxx Design Record</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ink:#12171C; --paper:#ECEFF1; --surface:#F7F9FA; --surface-2:#E2E7EA;
+  --rule:#C8D1D6; --rule-soft:#DBE2E6; --muted:#5A6670;
+  --petrol:#17607A; --petrol-soft:#DCEAEF;
+  --ember:#B04E1B; --ember-soft:#F6E4D8;
+  --signal:#2E7D5B; --signal-soft:#DDEDE4;
+  --alert:#A32C25;
+  --fg:var(--ink); --bg:var(--paper);
+  --display:"IBM Plex Sans Condensed",'Helvetica Neue',Arial,sans-serif;
+  --body:"IBM Plex Serif",Georgia,'Times New Roman',serif;
+  --mono:"IBM Plex Mono",ui-monospace,'SF Mono',Menlo,monospace;
+  --col:68ch;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ink:#E4EAED; --paper:#0E1317; --surface:#161D23; --surface-2:#1D262D;
+    --rule:#2C3841; --rule-soft:#222C34; --muted:#93A2AC;
+    --petrol:#5FB2CB; --petrol-soft:#12303C;
+    --ember:#E5893F; --ember-soft:#3A2314;
+    --signal:#63BF92; --signal-soft:#15301F;
+    --alert:#E4796F;
+    --fg:var(--ink); --bg:var(--paper);
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#E4EAED; --paper:#0E1317; --surface:#161D23; --surface-2:#1D262D;
+  --rule:#2C3841; --rule-soft:#222C34; --muted:#93A2AC;
+  --petrol:#5FB2CB; --petrol-soft:#12303C;
+  --ember:#E5893F; --ember-soft:#3A2314;
+  --signal:#63BF92; --signal-soft:#15301F;
+  --alert:#E4796F;
+  --fg:var(--ink); --bg:var(--paper);
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font-family:var(--body); font-size:17px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1080px; margin:0 auto; padding:0 28px 120px}
+.col{max-width:var(--col)}
+h1,h2,h3,h4,.eyebrow,th,.num,.chip,.mile-t{font-family:var(--display)}
+h1{font-size:clamp(2.6rem,6vw,4.2rem); line-height:.98; font-weight:700; letter-spacing:-.02em; margin:0; text-wrap:balance}
+h2{font-size:clamp(1.5rem,2.6vw,2rem); font-weight:600; line-height:1.12; letter-spacing:-.01em; margin:0; text-wrap:balance}
+h3{font-size:1.16rem; font-weight:600; margin:0; letter-spacing:.005em; text-wrap:balance}
+p{margin:0}
+a{color:var(--petrol); text-decoration-thickness:1px; text-underline-offset:2px}
+code{font-family:var(--mono); font-size:.855em; background:var(--surface-2); padding:.1em .34em; border-radius:2px}
+.eyebrow{
+  font-size:.7rem; font-weight:600; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--muted); margin:0;
+}
+
+/* ---------- masthead ---------- */
+header.mast{padding:76px 0 0}
+.mast .rulebar{height:6px; background:var(--petrol); max-width:180px; margin-bottom:26px}
+.lede{font-size:clamp(1.12rem,1.7vw,1.32rem); line-height:1.5; margin-top:22px; max-width:60ch; color:var(--fg)}
+.lede b{font-weight:600}
+.specstrip{
+  display:flex; flex-wrap:wrap; gap:0; margin:40px 0 0;
+  border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);
+}
+.spec{padding:14px 22px 14px 0; margin-right:22px; border-right:1px solid var(--rule-soft); flex:0 0 auto}
+.spec:last-child{border-right:none}
+.spec dt{font-family:var(--display); font-size:.66rem; letter-spacing:.13em; text-transform:uppercase; color:var(--muted); margin:0 0 3px}
+.spec dd{margin:0; font-family:var(--mono); font-size:.88rem; font-weight:500; font-variant-numeric:tabular-nums}
+
+/* ---------- sections ---------- */
+section{padding:64px 0 0}
+.shead{display:flex; align-items:baseline; gap:16px; border-bottom:1px solid var(--rule); padding-bottom:12px; margin-bottom:32px}
+.shead .sn{font-family:var(--mono); font-size:.8rem; font-weight:600; color:var(--petrol); flex:0 0 auto; padding-top:.2em}
+.stack{display:flex; flex-direction:column; gap:20px}
+.stack.tight{gap:14px}
+
+/* ---------- panels ---------- */
+.panel{
+  background:var(--surface); border:1px solid var(--rule); border-radius:3px;
+  padding:26px 28px; display:flex; flex-direction:column; gap:16px;
+}
+.panel.wide{margin:8px 0}
+.panel-h{display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap}
+.tag{
+  font-family:var(--display); font-size:.64rem; font-weight:600; letter-spacing:.13em;
+  text-transform:uppercase; padding:3px 8px; border-radius:2px; white-space:nowrap;
+}
+.tag.meas{background:var(--signal-soft); color:var(--signal); border:1px solid var(--signal)}
+.tag.proj{background:var(--ember-soft); color:var(--ember); border:1px solid var(--ember)}
+.tag.lit{background:var(--petrol-soft); color:var(--petrol); border:1px solid var(--petrol)}
+
+/* ---------- tables ---------- */
+.tscroll{overflow-x:auto; margin:0 -4px; padding:0 4px}
+table{border-collapse:collapse; width:100%; font-size:.9rem; min-width:520px}
+th{
+  font-size:.66rem; font-weight:600; letter-spacing:.12em; text-transform:uppercase;
+  text-align:left; color:var(--muted); padding:0 14px 8px 0; border-bottom:1px solid var(--rule);
+  vertical-align:bottom;
+}
+td{padding:9px 14px 9px 0; border-bottom:1px solid var(--rule-soft); vertical-align:top; font-family:var(--body)}
+td.n,th.n{text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; padding-right:18px}
+th.n{text-align:right}
+tbody tr:last-child td{border-bottom:none}
+td.lbl{font-family:var(--mono); font-size:.85rem; white-space:nowrap}
+.hot{color:var(--ember); font-weight:600}
+.cold{color:var(--petrol); font-weight:600}
+.good{color:var(--signal); font-weight:600}
+.bad{color:var(--alert); font-weight:600}
+caption{caption-side:bottom; text-align:left; font-size:.82rem; color:var(--muted); padding-top:12px; line-height:1.5}
+
+/* ---------- figures ---------- */
+figure{margin:12px 0; display:flex; flex-direction:column; gap:12px}
+figure svg{max-width:100%; height:auto; display:block}
+figcaption{font-size:.84rem; color:var(--muted); line-height:1.55; max-width:74ch}
+.figbox{background:var(--surface); border:1px solid var(--rule); border-radius:3px; padding:24px; overflow-x:auto}
+
+/* ---------- contribution cards ---------- */
+.contrib{display:flex; flex-direction:column; gap:0; border-top:2px solid var(--fg)}
+.citem{display:grid; grid-template-columns:52px 1fr; gap:0 20px; padding:24px 0; border-bottom:1px solid var(--rule)}
+.citem .num{font-family:var(--mono); font-size:1.4rem; font-weight:600; color:var(--petrol); line-height:1}
+.citem .cbody{display:flex; flex-direction:column; gap:12px; min-width:0}
+.citem h3 .k{color:var(--muted); font-weight:500}
+.claim{
+  font-family:var(--mono); font-size:.82rem; line-height:1.5; padding:10px 14px;
+  background:var(--surface-2); border-left:3px solid var(--ember); border-radius:0 2px 2px 0;
+}
+.prior{font-size:.86rem; color:var(--muted)}
+.prior b{font-family:var(--display); font-weight:600; letter-spacing:.06em; text-transform:uppercase; font-size:.68rem; color:var(--muted)}
+
+/* ---------- milestones ---------- */
+.miles{display:flex; flex-direction:column; gap:0}
+.mile{display:grid; grid-template-columns:74px 1fr; gap:0 20px; padding:20px 0; border-bottom:1px solid var(--rule-soft)}
+.mile:first-child{border-top:1px solid var(--rule)}
+.mile .mid{font-family:var(--mono); font-size:.82rem; font-weight:600; color:var(--petrol); padding-top:2px}
+.mile .mbody{display:flex; flex-direction:column; gap:8px; min-width:0}
+.mile-t{font-size:1.02rem; font-weight:600}
+.kill{font-size:.85rem; color:var(--muted)}
+.kill b{color:var(--alert); font-family:var(--display); font-weight:600; text-transform:uppercase; letter-spacing:.08em; font-size:.68rem}
+.done{background:var(--signal-soft); color:var(--signal); border:1px solid var(--signal); font-family:var(--display);
+      font-size:.62rem; font-weight:600; letter-spacing:.12em; text-transform:uppercase; padding:2px 7px; border-radius:2px; margin-left:8px; white-space:nowrap}
+
+/* ---------- code ---------- */
+pre{
+  margin:0; background:var(--surface-2); border:1px solid var(--rule); border-radius:3px;
+  padding:18px 20px; overflow-x:auto; font-family:var(--mono); font-size:.8rem; line-height:1.62;
+}
+pre code{background:none; padding:0; font-size:inherit}
+.c-kw{color:var(--petrol); font-weight:500}
+.c-cm{color:var(--muted); font-style:italic}
+.c-st{color:var(--signal)}
+.c-fn{color:var(--ember)}
+
+
+/* ---------- diagram marks: hue carries meaning, tokens carry the theme ---------- */
+.f-cold{fill:var(--petrol)} .s-cold{stroke:var(--petrol)}
+.f-hot{fill:var(--ember)}   .s-hot{stroke:var(--ember)}
+.f-bad{fill:var(--alert)}   .s-bad{stroke:var(--alert)}
+.f-onfill{fill:var(--paper)}
+.c-cold{color:var(--petrol)}
+.fx-cold{fill:var(--petrol-soft); stroke:var(--petrol)}
+.fx-hot{fill:var(--ember-soft);  stroke:var(--ember)}
+
+/* ---------- misc ---------- */
+ul.tickl{margin:0; padding-left:1.1em}
+ul.tickl li{margin-bottom:8px}
+ul.tickl li::marker{color:var(--petrol)}
+.two{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:20px}
+.kv{display:flex; flex-direction:column; gap:4px; padding:16px 18px; background:var(--surface); border:1px solid var(--rule); border-radius:3px}
+.kv .k{font-family:var(--display); font-size:.66rem; letter-spacing:.13em; text-transform:uppercase; color:var(--muted)}
+.kv .v{font-family:var(--mono); font-size:1.32rem; font-weight:600; font-variant-numeric:tabular-nums; line-height:1.2}
+.kv .d{font-size:.82rem; color:var(--muted); line-height:1.45}
+.pull{
+  font-family:var(--display); font-size:clamp(1.2rem,2.2vw,1.6rem); font-weight:600; line-height:1.25;
+  border-left:4px solid var(--ember); padding:4px 0 4px 22px; margin:8px 0; max-width:56ch; text-wrap:balance;
+}
+footer{margin-top:80px; padding-top:28px; border-top:1px solid var(--rule); font-size:.84rem; color:var(--muted)}
+footer ol{padding-left:1.4em; margin:12px 0 0; display:flex; flex-direction:column; gap:6px}
+footer a{word-break:break-word}
+:focus-visible{outline:2px solid var(--ember); outline-offset:2px}
+@media (prefers-reduced-motion:no-preference){a{transition:color .12s ease}}
+@media (max-width:640px){
+  body{font-size:16px}
+  .citem,.mile{grid-template-columns:1fr; gap:10px}
+  .citem .num,.mile .mid{font-size:.9rem}
+}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <div class="rulebar"></div>
+  <p class="eyebrow">Design record &middot; local MoE inference &middot; Quilzo/potatomaxx</p>
+  <h1>potatomaxx</h1>
+  <p class="lede">A research record for <b>potatomaxx</b>, a layout compiler for disk-resident mixture-of-experts models. This document is kept in the state the investigation actually took &mdash; including <b>the central thesis that measurement falsified</b>, and what replaced it. The sections below are marked where a later measurement overturned an earlier claim.</p>
+  <dl class="specstrip">
+    <div class="spec"><dt>Target machine</dt><dd>i5-1235U &middot; 12 threads</dd></div>
+    <div class="spec"><dt>RAM</dt><dd>7.6 GiB (3.1 free)</dd></div>
+    <div class="spec"><dt>Accelerator</dt><dd>none (Iris Xe only)</dd></div>
+    <div class="spec"><dt>ISA</dt><dd>AVX2 + AVX-VNNI</dd></div>
+    <div class="spec"><dt>Disk free</dt><dd>902 GB NVMe</dd></div>
+    <div class="spec"><dt>Language</dt><dd>Rust 1.97</dd></div>
+  </dl>
+</header>
+<section style="padding-top:44px">
+  <div class="panel wide" style="border-left:4px solid var(--alert)">
+    <div class="panel-h">
+      <h3>What measurement changed</h3>
+      <span class="tag" style="background:var(--ember-soft); color:var(--alert); border:1px solid var(--alert)">correction</span>
+    </div>
+    <p style="font-family:var(--body)">The original design here argued for a full inference engine built on co-activation-aware disk layout, projecting 8&ndash;12 tok/s for a 30B-class MoE. Three findings, in order, cut that down:</p>
+    <ul class="tickl">
+      <li><b>Layout is the secondary lever, not the primary one.</b> Once you issue a layer's top-k reads concurrently &mdash; which any competent engine does &mdash; the measured gain from reordering experts is modest. Queue depth is worth 6&ndash;8&times; on the same device and <em>no file layout can influence it</em>. The big lever belongs to a runtime.</li>
+      <li><b>Fixed 2 MiB groups you always read whole are a net loss.</b> The over-read costs more than the coalescing saves at any expert size above ~256 KiB. What actually pays is coalescing <em>only the slices you need</em> into contiguous runs.</li>
+      <li><b>The runtime side is already occupied.</b> <a href="https://github.com/JustVugg/colibri">Colibri</a> (25.7k stars, pure C, Apache-2.0) ships expert streaming, router-lookahead prefetch, learned hot-expert pinning and speculative decoding. Building a fourth engine would have duplicated mature work.</li>
+    </ul>
+    <p style="font-family:var(--body)">So the project became a <b>layout compiler</b> instead: it rewrites the byte layout of a GGUF checkpoint, provably without touching a weight, and composes with every existing runtime rather than competing. Crucially it <em>measures</em> the gain for a given model, trace and device rather than asserting one &mdash; and reports honestly when the answer is "leave it alone". Sections 04&ndash;09 below are superseded on the engine question; sections 01&ndash;03 stand.</p>
+  </div>
+</section>
+
+
+<!-- ============ 01 THESIS ============ -->
+<section>
+  <div class="shead"><span class="sn">01</span><h2>The quantity that actually binds</h2></div>
+  <div class="col stack">
+    <p>Every "run big models locally" project starts from the wrong quantity. Parameter count is not what your laptop runs out of. What binds is <b>bytes of weight touched per generated token</b> &mdash; and those two numbers are only equal for a dense model held entirely in RAM, which is the one configuration we have no intention of using.</p>
+    <p>Once you separate them, the problem factors cleanly. Bytes per token is a product of four independent terms, and each has its own literature:</p>
+    <div class="claim" style="border-left-color:var(--petrol)">bytes/token  =  (params) &times; (bits per param / 8) &times; (fraction touched per token) &div; (tokens accepted per forward pass)</div>
+    <p>A 30B model at 4 bits that touches 10% of its weights per token and accepts 6 tokens per pass moves <b>250&nbsp;MB per token</b>, not 60&nbsp;GB. That is a number an SSD can serve. The engineering question is whether you can actually collect those scattered 250&nbsp;MB at the disk's rated speed &mdash; and that turns out to be where every existing tool falls apart.</p>
+  </div>
+</section>
+
+<!-- ============ 02 MEASUREMENTS ============ -->
+<section>
+  <div class="shead"><span class="sn">02</span><h2>Three measurements that reframe the problem</h2></div>
+  <div class="col stack" style="margin-bottom:28px">
+    <p>The received wisdom is that disk-backed inference is hopeless. That wisdom comes from GPU-land, where you compare NVMe against HBM. On a RAM-poor CPU laptop you are comparing NVMe against <em>DDR</em>, and the ratio is completely different. I measured it directly.</p>
+  </div>
+
+  <div class="two" style="margin-bottom:24px">
+    <div class="kv"><span class="k">DRAM read &middot; 12 threads</span><span class="v hot">30.0 GB/s</span><span class="d">10.3 GB/s on a single thread &mdash; one core cannot saturate memory, so kernels must be threaded even when memory-bound.</span></div>
+    <div class="kv"><span class="k">NVMe random read &middot; best case</span><span class="v cold">2.41 GB/s</span><span class="d">2 MiB blobs, queue depth 8, O_DIRECT. Sequential <code>dd</code> reaches 3.2 GB/s.</span></div>
+    <div class="kv"><span class="k">NVMe random read &middot; worst case</span><span class="v bad">0.12 GB/s</span><span class="d">64 KiB blobs at queue depth 1 &mdash; which is precisely the access pattern of an <code>mmap</code> page fault.</span></div>
+  </div>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 880 300" role="img" aria-label="Memory hierarchy comparison: on a GPU, HBM is roughly 400 times faster than NVMe, making disk offload hopeless; on this laptop DRAM is only 12 times faster than NVMe, making disk offload a solvable 12x problem.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <polygon points="0,1 9,5 0,9" fill="currentColor"/>
+          </marker>
+        </defs>
+        <!-- left: GPU world -->
+        <text x="0" y="16" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" letter-spacing="1.4" fill="currentColor" opacity=".55">WHERE THE WISDOM COMES FROM</text>
+        <rect x="0" y="34" width="360" height="52" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="16" y="58" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="currentColor">HBM</text>
+        <text x="16" y="76" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity=".6">datacenter GPU</text>
+        <text x="344" y="66" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="15" font-weight="600" fill="currentColor">~1000 GB/s</text>
+
+        <line x1="180" y1="94" x2="180" y2="150" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+        <text x="192" y="126" font-family="IBM Plex Mono, monospace" font-size="12" font-weight="600" class="f-bad">400&times; cliff</text>
+
+        <rect x="0" y="158" width="360" height="52" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4"/>
+        <text x="16" y="182" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="currentColor">NVMe</text>
+        <text x="16" y="200" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity=".6">the same SSD</text>
+        <text x="344" y="190" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="15" font-weight="600" fill="currentColor">2.4 GB/s</text>
+        <text x="0" y="248" font-family="IBM Plex Serif, serif" font-size="13" fill="currentColor" opacity=".7">Offload costs you almost everything.</text>
+        <text x="0" y="268" font-family="IBM Plex Serif, serif" font-size="13" fill="currentColor" opacity=".7">Conclusion: never touch the disk.</text>
+
+        <!-- divider -->
+        <line x1="440" y1="30" x2="440" y2="280" stroke="currentColor" stroke-width="1" opacity=".25"/>
+
+        <!-- right: laptop world -->
+        <text x="520" y="16" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" letter-spacing="1.4" class="f-cold">WHERE WE ACTUALLY ARE (MEASURED)</text>
+        <rect x="520" y="34" width="360" height="52" rx="2" fill="none" class="s-hot" stroke-width="2"/>
+        <text x="536" y="58" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" class="f-hot">DDR / LPDDR5</text>
+        <text x="536" y="76" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity=".6">12 threads, i5-1235U</text>
+        <text x="864" y="66" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="15" font-weight="600" class="f-hot">30.0 GB/s</text>
+
+        <line x1="700" y1="94" x2="700" y2="150" class="s-cold c-cold" stroke-width="2" marker-end="url(#ar)"/>
+        <text x="712" y="126" font-family="IBM Plex Mono, monospace" font-size="12" font-weight="600" class="f-cold">12&times; step</text>
+
+        <rect x="520" y="158" width="360" height="52" rx="2" fill="none" class="s-cold" stroke-width="2"/>
+        <text x="536" y="182" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" class="f-cold">NVMe</text>
+        <text x="536" y="200" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity=".6">2 MiB blobs @ QD8</text>
+        <text x="864" y="190" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="15" font-weight="600" class="f-cold">2.41 GB/s</text>
+        <text x="520" y="248" font-family="IBM Plex Serif, serif" font-size="13" fill="currentColor">A 12&times; step is a budget, not a cliff.</text>
+        <text x="520" y="268" font-family="IBM Plex Serif, serif" font-size="13" fill="currentColor">Sparsity and speculation give back more.</text>
+      </svg>
+    </div>
+    <figcaption><b>The whole thesis in one comparison.</b> "Disk offload is hopeless" is a true statement about GPUs, where HBM outruns NVMe by ~400&times;. On a RAM-starved laptop the relevant gap is DRAM&rarr;NVMe, measured here at 12&times;. Mixture-of-experts sparsity alone buys 10&ndash;40&times;. The budget closes.</figcaption>
+  </figure>
+
+  <div class="panel wide">
+    <div class="panel-h">
+      <h3>NVMe read bandwidth vs. blob size and queue depth</h3>
+      <span class="tag meas">measured &middot; this machine</span>
+    </div>
+    <div class="tscroll">
+      <table>
+        <caption>Random-offset <code>O_DIRECT</code> reads, page cache bypassed, time-bounded per cell. Reproduce with <code>potatomaxx probe</code>. <b>The first version of this table started at 64 KiB, and that was a mistake</b> &mdash; fine-grained MoE slices sit below it, so the surface could not resolve the layouts the tool exists to choose between. Extending down to the 4 KiB <code>O_DIRECT</code> floor changed the conclusions.</caption>
+        <thead><tr><th>Blob size</th><th class="n">QD 1</th><th class="n">QD 4</th><th class="n">QD 8</th><th class="n">QD 16</th><th>Reading</th></tr></thead>
+        <tbody>
+          <tr><td class="lbl">4 KiB</td><td class="n bad">0.02</td><td class="n">0.06</td><td class="n">0.09</td><td class="n">0.13</td><td>page-fault granularity &mdash; hopeless</td></tr>
+          <tr><td class="lbl">16 KiB</td><td class="n">0.06</td><td class="n">0.16</td><td class="n">0.25</td><td class="n">0.48</td><td>fine-grained MoE slices land here</td></tr>
+          <tr><td class="lbl">32 KiB</td><td class="n">0.08</td><td class="n">0.35</td><td class="n">0.57</td><td class="n">0.83</td><td>still deep in the penalty</td></tr>
+          <tr><td class="lbl">64 KiB</td><td class="n">0.15</td><td class="n">0.38</td><td class="n">0.61</td><td class="n">0.91</td><td>the old table's floor</td></tr>
+          <tr><td class="lbl">256 KiB</td><td class="n">0.35</td><td class="n">1.24</td><td class="n">1.82</td><td class="n">2.16</td><td><b>7.3&times; the 16 KiB cell at QD8</b></td></tr>
+          <tr><td class="lbl">1 MiB</td><td class="n">0.91</td><td class="n">2.46</td><td class="n">2.51</td><td class="n good">2.61</td><td>plateau begins</td></tr>
+          <tr><td class="lbl">2 MiB</td><td class="n">1.03</td><td class="n">2.09</td><td class="n">2.54</td><td class="n good">2.67</td><td>peak</td></tr>
+          <tr><td class="lbl">8 MiB</td><td class="n">1.55</td><td class="n">2.40</td><td class="n">2.26</td><td class="n">2.18</td><td>no further gain</td></tr>
+          <tr><td class="lbl">32 MiB</td><td class="n">1.95</td><td class="n">2.38</td><td class="n">1.92</td><td class="n">1.17</td><td>coarse granularity now hurts</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="col stack" style="margin-top:28px">
+    <p>Two hard constraints fall straight out of that table, and they are the reason this design looks the way it does.</p>
+    <ul class="tickl">
+      <li><b>Queue depth is worth 6&ndash;8&times;.</b> At 256 KiB, one outstanding read gives 0.35 GB/s and eight give 1.82. Nothing about the kernel changed &mdash; only how many reads were in flight. This is the dominant lever, and it is a property of the <em>runtime</em>: a file cannot make its reader queue more deeply.</li>
+      <li><b>Request size is worth 7&times;, but only below ~256 KiB.</b> At QD8, 16 KiB gives 0.25 GB/s and 256 KiB gives 1.82. Above 256 KiB the surface plateaus, so for coarse MoE checkpoints layout barely matters. This is the lever a file <em>can</em> pull, and it is why <code>potatomaxx</code> targets coalescing rather than grouping.</li>
+    </ul>
+    <p class="pull">The bottleneck is I/O scheduling, not GEMM kernels. But scheduling lives in the runtime &mdash; which is why this project stopped trying to be one.</p>
+    <p>This also explains, quantitatively, why the current tools fail. <code>llama.cpp</code> with a 17&nbsp;GB model on 7.6&nbsp;GB of RAM falls back to demand paging through <code>mmap</code>: synchronous faults, 4&ndash;64 KiB granularity, queue depth 1. That is the 0.12 GB/s cell. AirLLM's layer streaming is honest about the result &mdash; a single response takes <a href="https://abrarqasim.com/blog/airllm-the-hype-vs-the-reality/">15 to 30 minutes</a>. Neither is failing because the disk is slow. They are failing because they use it at 5% of its rated speed.</p>
+  </div>
+</section>
+
+<!-- ============ 03 LANDSCAPE ============ -->
+<section>
+  <div class="shead"><span class="sn">03</span><h2>Where the research frontier actually is</h2></div>
+  <div class="col stack" style="margin-bottom:26px">
+    <p>Six families of technique attack bytes-per-token. Knowing which are exhausted matters as much as knowing which work &mdash; building on a saturated lever is wasted effort.</p>
+  </div>
+  <div class="panel wide">
+    <div class="panel-h"><h3>Lever inventory</h3><span class="tag lit">literature</span></div>
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Lever</th><th>State of the art</th><th class="n">Buys</th><th>Verdict for this design</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="lbl">Bits per<br>weight</td>
+            <td>AQLM, QTIP, QuIP#, VPTQ all converge to 78&ndash;79% MC accuracy at 2.4&ndash;3.6 bpw from unrelated mathematical directions &mdash; strong evidence of an information-theoretic floor. Native-ternary <a href="https://arxiv.org/pdf/2504.12285">BitNet b1.58</a> escapes it by training in low precision rather than quantizing after.</td>
+            <td class="n">4&ndash;8&times;</td>
+            <td><b>Mostly exhausted.</b> Use 4-bit as baseline; adopt ternary models opportunistically. Do not invent a quantizer.</td>
+          </tr>
+          <tr>
+            <td class="lbl">Weights<br>touched</td>
+            <td>MoE routing (top-8 of 128), activation sparsity, <a href="https://arxiv.org/pdf/2401.14361">MoE-Infinity</a>, <a href="https://arxiv.org/pdf/2505.05950">FloE</a>, <a href="https://openreview.net/forum?id=wn6WHREK9k&noteId=03omZ7ohqG">Oracle-MoE</a>.</td>
+            <td class="n">10&ndash;40&times;</td>
+            <td><b>The dominant lever.</b> Everything here is built around it.</td>
+          </tr>
+          <tr>
+            <td class="lbl">Passes per<br>token</td>
+            <td>Speculative decoding, EAGLE/Medusa draft heads, <a href="https://arxiv.org/pdf/2505.10259">SpecOffload</a>, <a href="https://arxiv.org/pdf/2508.21706">hiding MoE offload latency with speculation</a>.</td>
+            <td class="n">2&ndash;6&times;</td>
+            <td><b>Underused in this regime.</b> Existing work targets GPUs with spare compute. See &sect;04.</td>
+          </tr>
+          <tr>
+            <td class="lbl">Where weights<br>live</td>
+            <td><a href="https://arxiv.org/pdf/2303.06865">FlexGen</a>, PowerInfer, AirLLM, <a href="https://arxiv.org/pdf/2504.03664">PIPO</a>, ktransformers, <code>llama.cpp --n-cpu-moe</code>.</td>
+            <td class="n">enabling</td>
+            <td><b>Immature for CPU-only.</b> All assume a GPU exists; the offload target is host RAM, not disk.</td>
+          </tr>
+          <tr>
+            <td class="lbl">KV cache</td>
+            <td>KIVI/KVQuant (2&ndash;4 bit), H2O / SnapKV / PyramidKV eviction, StreamingLLM sinks, and hybrid linear attention &mdash; <a href="https://huggingface.co/blog/mlabonne/qwen35">Qwen3-Next</a> and Kimi Linear run 3:1 Gated&nbsp;DeltaNet:full-attention for constant-size state.</td>
+            <td class="n">4&ndash;20&times;</td>
+            <td><b>Necessary, not sufficient.</b> Solves long context; irrelevant to weight bytes. Adopt wholesale.</td>
+          </tr>
+          <tr>
+            <td class="lbl">Params vs.<br>compute</td>
+            <td><a href="https://arxiv.org/html/2507.10524v1">Mixture-of-Recursions</a> and looped transformers decouple depth from parameter count; test-time scaling plus tools lets small models <a href="https://arxiv.org/html/2504.04718v2">beat models 14&times; larger</a> at matched compute.</td>
+            <td class="n">varies</td>
+            <td><b>The honest alternative.</b> Requires new pretraining or accepting latency. Keep as fallback path, not foundation.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="col stack" style="margin-top:28px">
+    <p>The shape of the gap is now clear. Quantization is nearly tapped out. Sparsity is the big lever but every system that exploits it well was written for a machine with a GPU and plenty of host RAM. Nobody has built the engine for the configuration most people actually own: <b>no discrete GPU, single-digit gigabytes of RAM, and a fast SSD with hundreds of gigabytes free.</b></p>
+  </div>
+</section>
+
+<!-- ============ 04 THE IDEA ============ -->
+<section>
+  <div class="shead"><span class="sn">04</span><h2>The idea: speculation as a bandwidth amplifier</h2></div>
+  <div class="col stack" style="margin-bottom:26px">
+    <p>Speculative decoding is universally described as a latency trick: a small draft model proposes <i>k</i> tokens, the big model verifies them in one pass, and you win because the big model's forward pass was memory-bound and had compute to spare.</p>
+    <p>In this setting that framing undersells it badly. Verifying <i>k</i> tokens together does three things at once, and the second and third are what matter here:</p>
+    <ul class="tickl">
+      <li>It amortizes each expert read across <i>k</i> tokens instead of one.</li>
+      <li>Because adjacent tokens reuse experts &mdash; measured overlap runs about <a href="https://arxiv.org/pdf/2606.15453">2&times; a random-routing baseline</a>, with ~44% of routers selecting the same expert as the previous block &mdash; the <em>union</em> of experts needed by a block of <i>k</i> tokens is far smaller than <i>k</i> times the per-token set. Reads grow sublinearly in <i>k</i>.</li>
+      <li>Most importantly, knowing the whole block's expert set up front lets you issue <b>every read for that block concurrently</b>. That is where the queue depth comes from &mdash; the measured 3&times;.</li>
+    </ul>
+    <p class="pull">The draft model's real job is not to save compute. It is to see far enough ahead to keep the NVMe queue full.</p>
+  </div>
+
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 880 430" role="img" aria-label="Windlass pipeline: a resident draft model proposes eight tokens; a router predictor converts them into a predicted expert set; the union of that set is fetched from NVMe as concurrent 2 MiB reads at queue depth eight while a hot-expert cache serves repeat hits from RAM; the big model then verifies all eight tokens in one batched pass, and accepted tokens plus routing traces feed back into the cache and the draft model.">
+        <defs>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><polygon points="0,1 9,5 0,9" fill="currentColor"/></marker>
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><polygon points="0,1 9,5 0,9" class="f-cold"/></marker>
+          <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><polygon points="0,1 9,5 0,9" class="f-hot"/></marker>
+        </defs>
+
+        <!-- tier labels -->
+        <text x="0" y="14" font-family="IBM Plex Sans Condensed, sans-serif" font-size="11" font-weight="600" letter-spacing="1.4" class="f-hot">RESIDENT IN RAM &middot; ~3.5 GB BUDGET</text>
+        <line x1="0" y1="22" x2="880" y2="22" class="s-hot" stroke-width="1" opacity=".4"/>
+
+        <!-- draft -->
+        <rect x="0" y="38" width="150" height="70" rx="2" fill="none" class="s-hot" stroke-width="2"/>
+        <text x="12" y="60" font-family="IBM Plex Sans Condensed, sans-serif" font-size="14" font-weight="600" fill="currentColor">Draft model</text>
+        <text x="12" y="78" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".65">0.5B, 4-bit</text>
+        <text x="12" y="94" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".65">~300 MB</text>
+
+        <line x1="150" y1="73" x2="212" y2="73" stroke="currentColor" stroke-width="1.5" marker-end="url(#a2)"/>
+        <text x="181" y="65" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">k=8 tokens</text>
+
+        <!-- predictor -->
+        <rect x="212" y="38" width="158" height="70" rx="2" fill="none" class="s-hot" stroke-width="2"/>
+        <text x="224" y="60" font-family="IBM Plex Sans Condensed, sans-serif" font-size="14" font-weight="600" fill="currentColor">Router predictor</text>
+        <text x="224" y="78" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".65">2-layer MLP per</text>
+        <text x="224" y="94" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".65">MoE layer, ~4 MB</text>
+
+        <line x1="370" y1="73" x2="432" y2="73" stroke="currentColor" stroke-width="1.5" marker-end="url(#a2)"/>
+        <text x="401" y="65" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor">expert ids</text>
+
+        <!-- union / scheduler -->
+        <rect x="432" y="38" width="176" height="70" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+        <text x="444" y="60" font-family="IBM Plex Sans Condensed, sans-serif" font-size="14" font-weight="600" fill="currentColor">Fetch scheduler</text>
+        <text x="444" y="78" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".65">union over block,</text>
+        <text x="444" y="94" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".65">coalesce to groups</text>
+
+        <!-- hot cache -->
+        <rect x="670" y="38" width="210" height="70" rx="2" class="fx-hot" fill-opacity=".5" stroke-width="2"/>
+        <text x="682" y="60" font-family="IBM Plex Sans Condensed, sans-serif" font-size="14" font-weight="600" fill="currentColor">Hot-expert cache</text>
+        <text x="682" y="78" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".65">~3 GB, cost-aware</text>
+        <text x="682" y="94" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".65">admission (not LRU)</text>
+
+        <line x1="608" y1="60" x2="666" y2="60" class="s-hot" stroke-width="1.5" marker-end="url(#a4)"/>
+        <text x="637" y="52" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" class="f-hot">hit ~60%</text>
+
+        <!-- boundary to disk -->
+        <line x1="0" y1="150" x2="880" y2="150" class="s-cold" stroke-width="1" opacity=".4"/>
+        <text x="0" y="168" font-family="IBM Plex Sans Condensed, sans-serif" font-size="11" font-weight="600" letter-spacing="1.4" class="f-cold">ON NVMe &middot; MODEL STORE, 17&ndash;60 GB</text>
+
+        <!-- miss arrow down -->
+        <line x1="520" y1="108" x2="520" y2="196" class="s-cold" stroke-width="2" marker-end="url(#a3)"/>
+        <text x="532" y="140" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" class="f-cold">miss &rarr; 8 concurrent</text>
+        <text x="532" y="155" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" class="f-cold">io_uring reads</text>
+
+        <!-- disk blobs -->
+        <rect x="300" y="196" width="440" height="58" rx="2" class="fx-cold" fill-opacity=".5" stroke-width="2"/>
+        <text x="312" y="218" font-family="IBM Plex Sans Condensed, sans-serif" font-size="13" font-weight="600" fill="currentColor">Co-activation expert groups</text>
+        <text x="312" y="236" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".7">2 MiB aligned blobs &middot; QD8 &rarr; 2.41 GB/s measured</text>
+        <g class="s-cold" stroke-width="1.2" fill="none">
+          <rect x="612" y="205" width="18" height="40"/><rect x="634" y="205" width="18" height="40"/>
+          <rect x="656" y="205" width="18" height="40"/><rect x="678" y="205" width="18" height="40"/>
+          <rect x="700" y="205" width="18" height="40"/><rect x="722" y="205" width="12" height="40"/>
+        </g>
+
+        <!-- verify -->
+        <line x1="300" y1="225" x2="230" y2="225" stroke="currentColor" stroke-width="1.5" marker-end="url(#a2)"/>
+        <rect x="0" y="196" width="226" height="58" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+        <text x="12" y="218" font-family="IBM Plex Sans Condensed, sans-serif" font-size="13" font-weight="600" fill="currentColor">Batched verify pass</text>
+        <text x="12" y="236" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".7">8 tokens, GEMM not GEMV</text>
+
+        <!-- feedback -->
+        <line x1="113" y1="254" x2="113" y2="300" stroke="currentColor" stroke-width="1.5"/>
+        <line x1="113" y1="300" x2="790" y2="300" stroke="currentColor" stroke-width="1.5"/>
+        <line x1="790" y1="300" x2="790" y2="330" stroke="currentColor" stroke-width="1.5" marker-end="url(#a2)"/>
+        <text x="440" y="292" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor">accepted tokens + routing trace</text>
+
+        <rect x="620" y="330" width="260" height="62" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4"/>
+        <text x="632" y="352" font-family="IBM Plex Sans Condensed, sans-serif" font-size="13" font-weight="600" fill="currentColor">Nightly personalization</text>
+        <text x="632" y="370" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".7">re-layout &middot; re-quantize &middot;</text>
+        <text x="632" y="384" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".7">router + draft fine-tune</text>
+
+        <line x1="620" y1="361" x2="480" y2="361" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#a2)"/>
+        <text x="550" y="353" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">rewrites store</text>
+        <text x="550" y="378" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">+ draft weights</text>
+      </svg>
+    </div>
+    <figcaption><b>The pipeline.</b> The RAM tier holds only what must be resident: draft model, routing predictors, attention and shared weights, and a cache of hot experts. Everything else lives on NVMe as 2 MiB co-activation groups. The draft model's lookahead is what allows eight reads to be in flight at once rather than one at a time &mdash; the difference between 0.79 and 2.41 GB/s. The dashed feedback path is what makes the engine faster the longer it is used.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 05 CONTRIBUTIONS ============ -->
+<section>
+  <div class="shead"><span class="sn">05</span><h2>Four ideas, ranked by expected leverage</h2></div>
+  <div class="col stack" style="margin-bottom:26px">
+    <p>The first is a recomposition of known parts aimed at a configuration nobody targets. The other three I have not found in the literature, and each is falsifiable on its own.</p>
+  </div>
+
+  <div class="contrib">
+    <div class="citem">
+      <span class="num">01</span>
+      <div class="cbody">
+        <h3>Speculation as a queue-depth generator <span class="k">&mdash; recomposition</span></h3>
+        <p>Run the draft model far enough ahead that the fetch scheduler always has a full block of expert requests to issue. Speculation depth becomes a tunable that trades draft compute for I/O parallelism, and the optimum is set by the measured QD curve rather than by acceptance rate alone.</p>
+        <div class="claim">Falsifiable claim: effective read bandwidth during decode reaches &ge;2.0 GB/s sustained, versus &le;0.8 GB/s for a demand-paged baseline on the same model and machine.</div>
+        <p class="prior"><b>prior art</b> SpecOffload and Zhang et al. combine speculation with offloading, but both assume a GPU with idle compute and offload to host RAM. The CPU-only, disk-resident case inverts the economics: draft compute is expensive and the thing being bought is queue depth, not spare FLOPs.</p>
+      </div>
+    </div>
+
+    <div class="citem">
+      <span class="num">02</span>
+      <div class="cbody">
+        <h3>Co-activation-aware disk layout <span class="k">&mdash; novel, and directly measured</span></h3>
+        <p>Expert order on disk is normally an accident of the checkpoint's tensor order. Treat it as a graph partitioning problem instead: run a calibration corpus, build the expert co-activation matrix, and pack experts that fire together into 2 MiB aligned groups. One read then serves several needed experts, and the access pattern moves from the 0.12 GB/s corner of the table to the 2.41 GB/s corner.</p>
+        <div class="claim">Falsifiable claim: on a fine-grained MoE (128+ experts/layer), co-activation packing delivers &ge;2&times; effective read bandwidth over checkpoint order at identical hit rate &mdash; a pure layout win, no accuracy change whatsoever.</div>
+        <p class="prior"><b>prior art</b> Oracle-MoE and Sticky Routing change <em>routing</em> to improve locality; ReMoE fine-tunes the router. All modify the model. This modifies only the byte layout of the file, so it composes with every one of them and risks nothing.</p>
+      </div>
+    </div>
+
+    <div class="citem">
+      <span class="num">03</span>
+      <div class="cbody">
+        <h3>Bit allocation by access frequency, not just sensitivity <span class="k">&mdash; novel</span></h3>
+        <p>Mixed-precision quantization allocates bits by <em>sensitivity</em>: how much loss rises if this tensor is crushed. That objective is wrong when the binding constraint is bytes moved through a tiered store. The right objective weights each expert by how often it is actually read <em>and</em> by which tier serves it &mdash; a cold expert costs 12&times; more per byte than a resident one.</p>
+        <div class="claim">bits(e) &prop; argmin over budget of &Sigma; freq(e) &middot; &Delta;loss(e, bits) &nbsp;s.t.&nbsp; &Sigma; freq(e) &middot; bytes(e) &middot; cost(tier(e)) &le; budget</div>
+        <p>In practice: hot resident experts get 5&ndash;6 bits, cold disk experts get 2&ndash;3. Expected loss barely moves because rarely-read experts contribute little to average loss, while cold-path bytes &mdash; the expensive ones &mdash; roughly halve.</p>
+        <p class="prior"><b>prior art</b> Every mixed-precision scheme I found (SpQR, per-layer bit search, sensitivity-guided allocation) optimizes accuracy per <em>byte stored</em>. None optimizes accuracy per <em>byte moved through a specific memory tier</em>, which is the quantity that sets tokens per second here.</p>
+      </div>
+    </div>
+
+    <div class="citem">
+      <span class="num">04</span>
+      <div class="cbody">
+        <h3>The personalization flywheel <span class="k">&mdash; novel as a deployed loop</span></h3>
+        <p>A local engine has something no cloud service has: the complete trace of one user's actual workload. Every night, cheaply and offline, use it &mdash; (a) re-partition the disk layout against the observed co-activation matrix; (b) re-allocate bits against observed frequencies; (c) fine-tune the router with a temporal-locality penalty so experts persist across adjacent tokens, raising cache hit rate; (d) distil the draft model on the big model's own accepted tokens for this user, raising acceptance and therefore block size.</p>
+        <div class="claim">Falsifiable claim: tokens/sec on a held-out slice of the user's own workload improves &ge;30% between day 1 and day 14, with no change to the base checkpoint and no measurable quality regression.</div>
+        <p class="prior"><b>prior art</b> ReMoE and Sticky Routing establish that router fine-tuning for reuse works, but as a training-time step against a general corpus. Domain-specific pruning literature personalizes to a <em>domain</em>. Nothing closes the loop on one user's live traces as a continuous deployment-time process &mdash; which is the only setting where a per-user objective is legitimate.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 06 LAYOUT DIAGRAM ============ -->
+<section>
+  <div class="shead"><span class="sn">06</span><h2>What the layout rewrite actually changes</h2></div>
+  <figure>
+    <div class="figbox">
+      <svg viewBox="0 0 880 300" role="img" aria-label="Comparison of disk layouts. In checkpoint order the eight experts needed by a token are scattered across the file, requiring eight small random reads served at low queue depth. After co-activation packing the same experts fall inside two 2 MiB groups, requiring two large concurrent reads.">
+        <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><polygon points="0,1 9,5 0,9" fill="currentColor"/></marker></defs>
+
+        <text x="0" y="14" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" letter-spacing="1.4" fill="currentColor" opacity=".55">BEFORE &middot; CHECKPOINT ORDER</text>
+        <!-- file strip -->
+        <rect x="0" y="30" width="880" height="34" fill="none" stroke="currentColor" stroke-width="1" opacity=".45"/>
+        <g fill="currentColor" opacity=".14">
+          <rect x="4" y="34" width="24" height="26"/><rect x="60" y="34" width="24" height="26"/><rect x="132" y="34" width="24" height="26"/>
+          <rect x="188" y="34" width="24" height="26"/><rect x="252" y="34" width="24" height="26"/><rect x="316" y="34" width="24" height="26"/>
+          <rect x="388" y="34" width="24" height="26"/><rect x="452" y="34" width="24" height="26"/><rect x="524" y="34" width="24" height="26"/>
+          <rect x="596" y="34" width="24" height="26"/><rect x="668" y="34" width="24" height="26"/><rect x="740" y="34" width="24" height="26"/>
+          <rect x="812" y="34" width="24" height="26"/><rect x="844" y="34" width="24" height="26"/>
+        </g>
+        <!-- needed experts highlighted -->
+        <g class="f-bad">
+          <rect x="60" y="34" width="24" height="26"/><rect x="188" y="34" width="24" height="26"/><rect x="316" y="34" width="24" height="26"/>
+          <rect x="452" y="34" width="24" height="26"/><rect x="596" y="34" width="24" height="26"/><rect x="668" y="34" width="24" height="26"/>
+          <rect x="812" y="34" width="24" height="26"/><rect x="4" y="34" width="24" height="26"/>
+        </g>
+        <text x="0" y="84" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity=".7">8 experts needed &rarr; 8 scattered reads of ~200 KiB, issued as the routers resolve</text>
+        <text x="0" y="102" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" class="f-bad">effective: 0.26 GB/s  (256 KiB &times; QD1)</text>
+
+        <line x1="440" y1="118" x2="440" y2="152" stroke="currentColor" stroke-width="1.5" marker-end="url(#a5)"/>
+        <text x="452" y="140" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="currentColor">repack by co-activation</text>
+
+        <text x="0" y="180" font-family="IBM Plex Sans Condensed, sans-serif" font-size="12" font-weight="600" letter-spacing="1.4" class="f-cold">AFTER &middot; CO-ACTIVATION GROUPS</text>
+        <rect x="0" y="196" width="880" height="34" fill="none" stroke="currentColor" stroke-width="1" opacity=".45"/>
+        <!-- group boundaries -->
+        <g class="s-cold" stroke-width="1.5" fill="none">
+          <rect x="4" y="200" width="150" height="26"/><rect x="162" y="200" width="150" height="26"/>
+          <rect x="320" y="200" width="150" height="26"/><rect x="478" y="200" width="150" height="26"/>
+          <rect x="636" y="200" width="150" height="26"/><rect x="794" y="200" width="82" height="26"/>
+        </g>
+        <g class="f-cold" fill-opacity=".55">
+          <rect x="8" y="203" width="142" height="20"/><rect x="166" y="203" width="142" height="20"/>
+        </g>
+        <text x="79" y="217" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600" class="f-onfill">2 MiB group</text>
+        <text x="237" y="217" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600" class="f-onfill">2 MiB group</text>
+        <text x="0" y="250" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity=".7">same 8 experts now land in 2 groups &rarr; 2 large reads, both in flight at once</text>
+        <text x="0" y="268" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" class="f-cold">effective: 2.41 GB/s  (2 MiB &times; QD8)</text>
+        <text x="0" y="290" font-family="IBM Plex Serif, serif" font-size="12" fill="currentColor" opacity=".75">Identical weights. Identical outputs. Only the byte offsets changed.</text>
+      </svg>
+    </div>
+    <figcaption><b>Idea 02, drawn.</b> The engine never changes a weight value here &mdash; it changes where bytes sit so that the requests it must issue anyway fall into the fast corner of the measured bandwidth table. Reads that overshoot (fetching a co-resident expert that this token did not need) are close to free, because the table shows a 2 MiB read costs barely more than a 256 KiB one.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 07 RUST ============ -->
+<section>
+  <div class="shead"><span class="sn">07</span><h2>Why Rust, specifically</h2></div>
+  <div class="col stack">
+    <p>You asked for the most efficient and secure language. For this workload those two requirements point at the same answer, but the security argument is much stronger than the usual abstract one &mdash; because in a local inference engine the untrusted input is <b>the model file itself</b>, downloaded from a public hub and parsed by hand-written code full of offset arithmetic.</p>
+    <p>That surface is not hypothetical. It has been repeatedly and recently exploited:</p>
+  </div>
+  <div class="panel wide">
+    <div class="panel-h"><h3>Recent memory-safety failures in local inference stacks</h3><span class="tag lit">disclosed</span></div>
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Identifier</th><th>Component</th><th>Class</th><th>Consequence</th></tr></thead>
+        <tbody>
+          <tr><td class="lbl">CVE-2026-27940</td><td>llama.cpp <code>gguf_init_from_file_impl()</code></td><td>integer overflow &rarr; undersized heap alloc &rarr; overflow</td><td>528+ bytes of attacker-controlled write past the buffer; arbitrary code execution. A <b>bypass of the fix</b> for CVE-2025-53630.</td></tr>
+          <tr><td class="lbl">CVE-2026-7482</td><td>Ollama GGUF loader ("Bleeding Llama")</td><td>heap out-of-bounds read, CVSS 9.1</td><td>Crafted tensor dimensions leak process memory &mdash; API keys, system prompts, other users' conversations.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="col stack" style="margin-top:26px">
+    <p>Both are pure parser bugs in the format layer &mdash; the part of an inference engine with no performance requirement at all, where C++ buys nothing and costs everything. In safe Rust, the integer overflow is a checked-arithmetic panic and the out-of-bounds read is a bounds-check panic. The class of bug simply does not reach exploitability.</p>
+    <p>This design pushes that further into a hard architectural rule, because Windlass is <em>more</em> exposed than llama.cpp, not less: it rewrites model files on disk and does asynchronous DMA-adjacent I/O into aligned buffers.</p>
+    <div class="two">
+      <div class="kv"><span class="k">Safe Rust, no exceptions</span><span class="v" style="font-size:1rem">format &amp; control plane</span><span class="d">GGUF/safetensors parsing, the layout rewriter, the fetch scheduler, cache policy, the HTTP/RPC surface. Every length and offset from a file is validated before use; <code>#![forbid(unsafe_code)]</code> at the crate level.</span></div>
+      <div class="kv"><span class="k">Audited unsafe, quarantined</span><span class="v" style="font-size:1rem">two crates only</span><span class="d"><code>wl-kernels</code> (AVX2/AVX-VNNI intrinsics for int4&times;int8 dot products) and <code>wl-io</code> (aligned buffers, io_uring submission). Each unsafe block carries a written invariant; both crates run under Miri and a fuzz corpus in CI.</span></div>
+    </div>
+    <p style="margin-top:8px">The efficiency side is straightforward: no GC pauses in a latency-sensitive decode loop, no runtime to ship, a single static binary, <code>std::arch</code> intrinsics that reach the same instructions as hand-written C, and the best async I/O story of any systems language &mdash; which matters more here than SIMD, since &sect;02 showed the bottleneck is queue management. The ecosystem is also ready: <a href="https://github.com/ericlbuehler/mistral.rs">mistral.rs</a> and <a href="https://github.com/huggingface/candle">candle</a> are competitive with llama.cpp on CPU today, so tensor plumbing and GGUF schema work can be borrowed rather than rewritten.</p>
+    <div class="panel wide" style="margin-top:8px">
+      <div class="panel-h"><h3>Crate layout</h3><span class="tag proj">proposed</span></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Crate</th><th>Responsibility</th><th>Key dependency</th><th>unsafe</th></tr></thead>
+          <tbody>
+            <tr><td class="lbl">wl-format</td><td>GGUF/safetensors read, strict validation, the Windlass on-disk store format</td><td><code>memmap2</code>, <code>zerocopy</code></td><td class="good">forbidden</td></tr>
+            <tr><td class="lbl">wl-io</td><td>io_uring submission queues, O_DIRECT aligned buffer pool, per-tier read paths</td><td><code>io-uring</code>, <code>libc</code></td><td class="hot">audited</td></tr>
+            <tr><td class="lbl">wl-kernels</td><td>int4&times;int8 GEMM/GEMV, dequant, softmax, RoPE; AVX2 + AVX-VNNI, runtime dispatch</td><td><code>std::arch</code>, <code>rayon</code></td><td class="hot">audited</td></tr>
+            <tr><td class="lbl">wl-sched</td><td>expert prediction, block union, prefetch, cost-aware cache admission</td><td><code>tokio</code></td><td class="good">forbidden</td></tr>
+            <tr><td class="lbl">wl-engine</td><td>graph execution, speculative loop, KV cache (quantized + sink/window)</td><td>&mdash;</td><td class="good">forbidden</td></tr>
+            <tr><td class="lbl">wl-forge</td><td>offline: co-activation partitioning, bit allocation, nightly personalization jobs</td><td><code>candle</code></td><td class="good">forbidden</td></tr>
+            <tr><td class="lbl">wl-cli</td><td>single static binary; OpenAI-compatible local server</td><td><code>clap</code>, <code>axum</code></td><td class="good">forbidden</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p>The core of the scheduler &mdash; the piece that turns lookahead into queue depth &mdash; is about this much code:</p>
+    <pre><code><span class="c-cm">// wl-sched: one speculative block becomes one batch of concurrent reads.</span>
+<span class="c-kw">pub async fn</span> <span class="c-fn">prefetch_block</span>(&amp;<span class="c-kw">self</span>, draft: &amp;[TokenId], layer: LayerIdx) -&gt; Result&lt;()&gt; {
+    <span class="c-cm">// 1. predict the expert set for every token in the block, then union it.</span>
+    <span class="c-kw">let</span> <span class="c-kw">mut</span> want = ExpertSet::new();
+    <span class="c-kw">for</span> t <span class="c-kw">in</span> draft { want.extend(<span class="c-kw">self</span>.predictor.top_k(layer, t)?); }
+
+    <span class="c-cm">// 2. drop resident experts; map the rest to 2 MiB co-activation groups,</span>
+    <span class="c-cm">//    so one read can satisfy several misses at once.</span>
+    <span class="c-kw">let</span> groups: BTreeSet&lt;GroupId&gt; = want.iter()
+        .filter(|e| !<span class="c-kw">self</span>.cache.resident(e))
+        .map(|e| <span class="c-kw">self</span>.store.group_of(e))
+        .collect();
+
+    <span class="c-cm">// 3. submit every read at once. this is the whole trick: QD == groups.len(),</span>
+    <span class="c-cm">//    which the measured curve turns into ~3x the bandwidth of QD1.</span>
+    <span class="c-kw">let</span> reads = groups.iter().map(|g| <span class="c-kw">self</span>.io.read_group(*g));
+    <span class="c-kw">for</span> buf <span class="c-kw">in</span> futures::future::try_join_all(reads).<span class="c-kw">await</span>? {
+        <span class="c-kw">self</span>.cache.admit(buf, AdmitCost::from_tier(Tier::Nvme));
+    }
+    Ok(())
+}</code></pre>
+  </div>
+</section>
+
+<!-- ============ 08 PROJECTION ============ -->
+<section>
+  <div class="shead"><span class="sn">08</span><h2>What this should deliver</h2></div>
+  <div class="col stack" style="margin-bottom:24px">
+    <p>Worked through for a 30B-A3B-class MoE at 4 bits &mdash; 17 GB on disk, 3B parameters active per token &mdash; on the measured machine. Each row applies one lever to the row above it.</p>
+  </div>
+  <div class="panel wide">
+    <div class="panel-h"><h3>Bytes per accepted token</h3><span class="tag proj">projection from measured constants</span></div>
+    <div class="tscroll">
+      <table>
+        <caption>Cache hit rate assumes the Zipfian expert-access skew reported across the MoE-Infinity / FloE line of work; speculative amortization assumes the ~2&times;-over-random block overlap measured in the expert-prefetching literature with 6 of 8 tokens accepted. Those two are the load-bearing assumptions and both are cheap to verify at milestone M2.</caption>
+        <thead><tr><th>Stage</th><th class="n">Cold bytes/token</th><th class="n">Implied tok/s</th><th>Mechanism</th></tr></thead>
+        <tbody>
+          <tr><td>All experts cold, per-token decode</td><td class="n">1.50 GB</td><td class="n bad">1.6</td><td>the naive disk-resident baseline</td></tr>
+          <tr><td>Dense + hot experts resident (3.5 GB)</td><td class="n">0.60 GB</td><td class="n">4.0</td><td>~60% hit on a skewed access distribution</td></tr>
+          <tr><td>+ speculative block union (k=8)</td><td class="n">0.33 GB</td><td class="n">7.3</td><td>expert reuse across adjacent tokens</td></tr>
+          <tr><td>+ 2-bit cold / 5-bit hot allocation</td><td class="n">0.17 GB</td><td class="n">14.2</td><td>idea 03 &mdash; bits follow the tier</td></tr>
+          <tr><td>&nbsp;&nbsp;&nbsp;bounded by CPU compute</td><td class="n">&mdash;</td><td class="n">22&ndash;38</td><td>6.6 GOP/token, batched, AVX-VNNI, 12 threads</td></tr>
+          <tr><td><b>Overlapped I/O and compute</b></td><td class="n">0.17 GB</td><td class="n good">8&ndash;12</td><td><b>the design target; 5 tok/s is the floor for viability</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="col stack" style="margin-top:26px">
+    <p>For comparison, the same 17 GB model on the same machine today: <code>llama.cpp</code> demand-pages at roughly 1 tok/s or worse, and AirLLM-style layer streaming takes 15&ndash;30 minutes per response. A 120B-A5B-class model &mdash; which no current tool will run on this hardware at all &mdash; projects to 3&ndash;6 tok/s, slow but genuinely usable for asynchronous work.</p>
+    <p>Note that 8&ndash;12 tok/s is also roughly what this machine achieves running a <em>4B</em> model through Vulkan on its iGPU. That is the real claim: <b>same speed, a model an order of magnitude larger.</b></p>
+  </div>
+</section>
+
+<!-- ============ 09 PLAN ============ -->
+<section>
+  <div class="shead"><span class="sn">09</span><h2>Build order, each stage with a kill criterion</h2></div>
+  <div class="col stack" style="margin-bottom:24px">
+    <p>Ordered so that the cheapest experiments test the load-bearing assumptions first. If a kill criterion trips, the honest move is to stop and fall back to &sect;03's last row &mdash; a small dense model with test-time compute and tools.</p>
+  </div>
+  <div class="miles">
+    <div class="mile"><span class="mid">M0</span><div class="mbody">
+      <p class="mile-t">Roofline probe <span class="done">done</span></p>
+      <p>Measure DRAM bandwidth and the NVMe blob&times;QD surface on the target machine. Already built and run &mdash; it produced &sect;02 and fixed the 2 MiB / QD8 design point.</p>
+      <p class="kill"><b>kill if</b> best-case random read is under ~1 GB/s, or the DRAM:NVMe ratio exceeds ~40&times;. Neither held.</p>
+    </div></div>
+    <div class="mile"><span class="mid">M1</span><div class="mbody">
+      <p class="mile-t">Store format and layout rewriter</p>
+      <p><code>wl-format</code> + <code>wl-forge</code>: read a GGUF MoE checkpoint, trace routing over a calibration corpus, build the co-activation matrix, partition into 2 MiB groups, write the Windlass store. Pure offline work, no inference loop needed &mdash; and it tests idea 02 in isolation by replaying a recorded trace against both layouts.</p>
+      <p class="kill"><b>kill if</b> co-activation packing yields under 1.5&times; effective bandwidth over checkpoint order on a replayed trace.</p>
+    </div></div>
+    <div class="mile"><span class="mid">M2</span><div class="mbody">
+      <p class="mile-t">Correct-but-slow engine, instrumented</p>
+      <p><code>wl-kernels</code> + <code>wl-engine</code>: single-token decode, no speculation, everything measured. The goal is not speed &mdash; it is ground truth on the two assumptions the projection rests on: the real cache hit rate at a 3.5 GB budget, and the real expert overlap between adjacent tokens.</p>
+      <p class="kill"><b>kill if</b> measured hit rate falls below ~40% or adjacent-token expert overlap is near the random baseline. Either one collapses the projection.</p>
+    </div></div>
+    <div class="mile"><span class="mid">M3</span><div class="mbody">
+      <p class="mile-t">Speculative loop and the fetch scheduler</p>
+      <p><code>wl-sched</code>: draft model, per-layer router predictors, block union, io_uring prefetch. This is where the headline number is either won or lost. Tune <i>k</i> against the measured QD curve rather than against acceptance rate.</p>
+      <p class="kill"><b>kill if</b> sustained decode-time read bandwidth stays under 1.5 GB/s despite deep queues.</p>
+    </div></div>
+    <div class="mile"><span class="mid">M4</span><div class="mbody">
+      <p class="mile-t">Cost-aware bit allocation</p>
+      <p>Frequency&times;tier-weighted bit search in <code>wl-forge</code>, validated against a quality suite so the accuracy cost of crushing cold experts is measured, not assumed.</p>
+      <p class="kill"><b>kill if</b> 2-bit cold experts cost more than ~1 point on the evaluation suite. Fall back to uniform 4-bit and accept roughly half the throughput.</p>
+    </div></div>
+    <div class="mile"><span class="mid">M5</span><div class="mbody">
+      <p class="mile-t">The nightly flywheel</p>
+      <p>Trace collection, re-layout, router locality fine-tune, draft distillation on accepted tokens. Strictly last: it is the most speculative idea and it multiplies whatever M1&ndash;M4 achieved rather than enabling it.</p>
+      <p class="kill"><b>kill if</b> day-14 throughput on held-out user workload improves under 10%. Ship without it; the engine still stands.</p>
+    </div></div>
+  </div>
+</section>
+
+<!-- ============ 10 RISKS ============ -->
+<section>
+  <div class="shead"><span class="sn">10</span><h2>What could kill this</h2></div>
+  <div class="col stack">
+    <p>Stated plainly, because the failure modes are specific and worth knowing before you write M1.</p>
+    <ul class="tickl">
+      <li><b>SSD write endurance.</b> Reads are free; the nightly re-layout is not. Rewriting a 60 GB store often enough would matter on a consumer drive. Mitigation: rewrite incrementally, only groups whose partition actually changed, and cap it at a fixed budget per week.</li>
+      <li><b>Router predictor accuracy is the whole game.</b> Prefetching the wrong experts is worse than not prefetching &mdash; you spend bandwidth and still stall. If per-layer prediction cannot clear roughly 80% top-<i>k</i> recall a few layers ahead, the queue depth argument fails. This is the single most important thing M2 measures.</li>
+      <li><b>Thermals on a 15 W laptop chip.</b> Sustained 12-thread AVX-VNNI on a U-series part will throttle. The projection's compute headroom is comfortable enough to absorb it, but sustained throughput will sit below burst.</li>
+      <li><b>WSL2 taxes both bottlenecks.</b> The 2.41 GB/s measurement already includes virtual-disk overhead, so bare-metal Linux should be better, not worse &mdash; but iGPU access via <code>/dev/dxg</code> runs Vulkan at roughly two-thirds of native, so treat any GPU path as a bonus, never as load-bearing.</li>
+      <li><b>Dense models get nothing from this.</b> The design is fundamentally about sparsity. A dense 70B remains hopeless here, and honestly so &mdash; no layout or scheduling trick changes the fact that it touches every weight for every token.</li>
+    </ul>
+    <p class="pull">If the sparsity assumption holds, this works. If it doesn't, no amount of engineering saves it &mdash; and M2 tells you which within days.</p>
+  </div>
+</section>
+
+<footer>
+  <p class="eyebrow" style="margin-bottom:6px">Sources</p>
+  <p>Measurements in &sect;02 were taken on the target machine on 21 August 2026 using a std-only Rust probe (<code>probe/src/main.rs</code>); every other number is attributed below. Rows marked <span class="tag proj" style="display:inline-block;vertical-align:baseline">projection</span> are arithmetic over measured constants and named assumptions, not results.</p>
+  <ol>
+    <li>Egiazarian et&nbsp;al., <a href="https://arxiv.org/pdf/2401.06118">Extreme Compression of Large Language Models via Additive Quantization (AQLM)</a></li>
+    <li>Microsoft, <a href="https://arxiv.org/pdf/2504.12285">BitNet b1.58 2B4T Technical Report</a> &middot; <a href="https://github.com/microsoft/BitNet">bitnet.cpp</a></li>
+    <li>Sheng et&nbsp;al., <a href="https://arxiv.org/pdf/2303.06865">FlexGen: High-Throughput Generative Inference of LLMs</a></li>
+    <li>Xue et&nbsp;al., <a href="https://arxiv.org/pdf/2401.14361">MoE-Infinity: Efficient MoE Inference on Personal Machines with Sparsity-Aware Expert Cache</a></li>
+    <li><a href="https://arxiv.org/pdf/2505.05950">FloE: On-the-Fly MoE Inference on Memory-constrained GPU</a> &middot; <a href="https://arxiv.org/pdf/2504.03664">PIPO: Pipelined Offloading for Efficient Inference on Consumer Devices</a></li>
+    <li><a href="https://arxiv.org/pdf/2606.15453">A Spatio-Temporal Expert Prefetching Framework for Efficient MoE-based LLM Inference</a> &mdash; source of the adjacent-token expert-overlap measurements</li>
+    <li><a href="https://arxiv.org/abs/2607.08780">Sticky Routing: Training MoE Models for Memory-Efficient Inference</a> &middot; <a href="https://arxiv.org/pdf/2605.27081">ReMoE: Boosting Expert Reuse through Router Fine-Tuning</a> &middot; <a href="https://openreview.net/forum?id=wn6WHREK9k&noteId=03omZ7ohqG">Oracle-MoE</a></li>
+    <li><a href="https://arxiv.org/pdf/2505.10259">SpecOffload</a> &middot; <a href="https://arxiv.org/pdf/2508.21706">Accelerating MoE Inference by Hiding Offloading Latency with Speculative Decoding</a></li>
+    <li>KV cache: <a href="https://arxiv.org/pdf/2510.13334">Taming the Fragility of KV Cache Eviction</a> &middot; <a href="https://arxiv.org/pdf/2505.19586">TailorKV</a> &middot; <a href="https://arxiv.org/pdf/2510.13602">NOSA: Native and Offloadable Sparse Attention</a></li>
+    <li>Architecture: <a href="https://huggingface.co/blog/mlabonne/qwen35">Qwen3.5 and the hybrid-attention shift</a> &middot; <a href="https://arxiv.org/html/2507.10524v1">Mixture-of-Recursions</a></li>
+    <li>Small-model scaling: <a href="https://arxiv.org/html/2504.04718v2">T1: Tool-integrated Verification for Test-time Compute Scaling in SLMs</a></li>
+    <li>Intel-specific: <a href="https://arxiv.org/pdf/2508.06753">Pushing the Envelope of LLM Inference on AI-PC and Intel GPUs</a> &middot; <a href="https://arxiv.org/pdf/2511.13676">T-SAR: CPU-Only Ternary LLM Inference via In-Place SIMD ALU Reorganization</a></li>
+    <li>Security: <a href="https://www.endorlabs.com/vulnerability/cve-2026-27940">CVE-2026-27940 (llama.cpp GGUF heap overflow)</a> &middot; <a href="https://www.stingrai.io/blog/malicious-gguf-file-llama-cpp-parser-rce">malicious GGUF RCE analysis</a> &middot; <a href="https://pasqualepillitteri.it/en/news/2343/bleeding-llama-malicious-gguf-local-llm-memory-leak">Bleeding Llama, CVE-2026-7482</a></li>
+    <li>Rust ecosystem: <a href="https://github.com/ericlbuehler/mistral.rs">mistral.rs</a> &middot; <a href="https://github.com/huggingface/candle">candle</a></li>
+    <li>Baselines: <a href="https://abrarqasim.com/blog/airllm-the-hype-vs-the-reality/">AirLLM &mdash; hype vs. reality</a> &middot; <a href="https://github.com/ggml-org/llama.cpp/discussions/26729">Vulkan on Intel iGPU under WSL2</a></li>
+  </ol>
+</footer>
+
+</div>

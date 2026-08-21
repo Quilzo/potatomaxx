@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pmx-gguf",
+    "crates/pmx-probe",
+    "crates/pmx-trace",
+    "crates/pmx-partition",
+    "crates/pmx-plan",
+    "crates/pmx-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/Quilzo/potatomaxx"
+authors = ["Quilzo"]
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+# The probe measures I/O; it must not be reordered into oblivion by the optimiser,
+# and it is the one place we want debug symbols in release builds.
+[profile.release.package.pmx-probe]
+opt-level = 2
+debug = 1

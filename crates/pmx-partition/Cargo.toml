@@ -1,0 +1,16 @@
+[package]
+name = "pmx-partition"
+description = "Expert-order optimisation against a measured storage bandwidth surface."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+pmx-probe = { path = "../pmx-probe" }
+pmx-trace = { path = "../pmx-trace" }
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "pmx-cli"
+description = "The potatomaxx command line tool."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "potatomaxx"
+path = "src/main.rs"
+
+[dependencies]
+pmx-gguf = { path = "../pmx-gguf" }
+pmx-probe = { path = "../pmx-probe" }
+pmx-trace = { path = "../pmx-trace" }
+pmx-partition = { path = "../pmx-partition" }
+pmx-plan = { path = "../pmx-plan" }
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "pmx-plan"
+description = "Residency and bit-width allocation driven by measured access frequency and tier cost."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+pmx-trace = { path = "../pmx-trace" }
+
+[lints]
+workspace = true
