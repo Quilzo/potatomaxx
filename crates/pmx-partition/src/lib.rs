@@ -343,12 +343,15 @@ impl OptimizeReport {
         self.optimized.speedup_over(&self.baseline)
     }
 
-    /// Whether the gain is large enough to be worth rewriting a file for.
+    /// Whether the gain clears `min_speedup` and is worth rewriting a file for.
     ///
-    /// Below this the honest recommendation is to leave the checkpoint alone:
-    /// a few percent is inside the noise of the bandwidth measurement itself.
-    pub fn worth_repacking(&self) -> bool {
-        self.speedup() >= 1.05
+    /// Below the threshold the honest recommendation is to leave the checkpoint
+    /// alone: a few percent is inside the noise of the bandwidth measurement
+    /// itself. Some devices offer nothing at all — throttled cloud storage
+    /// measures nearly flat across request sizes, and on such a device no
+    /// layout can help. Saying so is the point, not a failure.
+    pub fn worth_repacking(&self, min_speedup: f64) -> bool {
+        self.speedup() >= min_speedup
     }
 }
 
@@ -768,7 +771,7 @@ mod tests {
         let ca = CoActivation::from_trace(&t, 0);
         let rep = optimize(&edges, &ca, &model(64 << 10), &OptimizeConfig::default());
         assert!(
-            !rep.worth_repacking(),
+            !rep.worth_repacking(1.05),
             "random routing should not be judged worth repacking (speedup {:.3})",
             rep.speedup()
         );

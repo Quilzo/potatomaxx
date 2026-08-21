@@ -80,7 +80,8 @@ OPTIONS
   analyse  --model <path> --trace <path> [--probe <path>] [--merge-gap <n>]
            [--queue-depth <n>]   reads the consuming runtime keeps in flight (default 8)
   plan     --model <path> --trace <path> [--probe <path>] [--merge-gap <n>]
-           [--queue-depth <n>] [--ram-mib <n>] [--out <path>]
+           [--queue-depth <n>] [--ram-mib <n>] [--min-speedup <f>] [--out <path>]
+           --min-speedup <f>     gain a layer must clear to be repacked (default 1.05)
   pack     --model <path> --plan <path> --out <path>
   verify   --model <path> --repacked <path> --plan <path>
 
@@ -408,6 +409,8 @@ type LayerAnalysis = (moe::MoeLayer, pmx_partition::OptimizeReport);
 struct Analysis {
     trace: Trace,
     layers: Vec<LayerAnalysis>,
+    /// Speedup a layer must clear to be judged worth repacking.
+    min_speedup: f64,
 }
 
 /// Shared analysis core: for each layer, optimise and report.
@@ -416,6 +419,7 @@ fn analyse_layers(args: &Args) -> Result<Analysis, String> {
     let tracep = args.req("trace")?;
     let merge_gap: u32 = args.num("merge-gap", 0)?;
     let queue_depth: usize = args.num("queue-depth", 8)?;
+    let min_speedup: f64 = args.num("min-speedup", 1.05)?;
     let surface = load_surface(args);
 
     let g = open_model(model)?;
@@ -453,12 +457,17 @@ fn analyse_layers(args: &Args) -> Result<Analysis, String> {
     Ok(Analysis {
         trace: t,
         layers: out,
+        min_speedup,
     })
 }
 
 fn cmd_analyse(args: &Args) -> Result<(), String> {
     let calibrated = args.get("probe").is_some();
-    let layers = analyse_layers(args)?.layers;
+    let Analysis {
+        layers,
+        min_speedup,
+        ..
+    } = analyse_layers(args)?;
     outln!();
     outln!(
         "{:>6} {:>9} {:>12} {:>12} {:>9}  verdict",
@@ -470,12 +479,12 @@ fn cmd_analyse(args: &Args) -> Result<(), String> {
     );
     let mut worth = 0;
     for (l, r) in &layers {
-        let v = if r.worth_repacking() {
+        let v = if r.worth_repacking(min_speedup) {
             "repack"
         } else {
             "leave alone"
         };
-        if r.worth_repacking() {
+        if r.worth_repacking(min_speedup) {
             worth += 1;
         }
         outln!(
@@ -511,7 +520,11 @@ fn cmd_plan(args: &Args) -> Result<(), String> {
     let ram_mib: u64 = args.num("ram-mib", 0)?;
     let model = args.req("model")?.to_string();
     let tracep = args.req("trace")?.to_string();
-    let Analysis { trace: t, layers } = analyse_layers(args)?;
+    let Analysis {
+        trace: t,
+        layers,
+        min_speedup,
+    } = analyse_layers(args)?;
 
     let mut plan = Plan {
         model,
@@ -519,7 +532,7 @@ fn cmd_plan(args: &Args) -> Result<(), String> {
         layers: Vec::new(),
     };
     for (i, (l, r)) in layers.iter().enumerate() {
-        if !r.worth_repacking() {
+        if !r.worth_repacking(min_speedup) {
             continue;
         }
         plan.layers.push(LayerPlan {
@@ -573,7 +586,10 @@ fn cmd_plan(args: &Args) -> Result<(), String> {
         }
     }
     if plan.layers.is_empty() {
-        outln!("\nno layer clears the 1.05x threshold. Nothing worth repacking; no plan written.");
+        outln!(
+            "\nno layer clears the {min_speedup:.2}x threshold. Nothing worth repacking; no plan written.\n\
+             Lower it with --min-speedup if you want a plan anyway."
+        );
         return Ok(());
     }
     plan.write(&out)

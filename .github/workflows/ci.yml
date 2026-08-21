@@ -29,6 +29,12 @@ jobs:
   # The correctness claim, exercised as the CLI rather than as unit tests:
   # repack a synthetic checkpoint, prove the weights survived, then prove that
   # verification actually rejects a corrupted file.
+  #
+  # Note --min-speedup 1.0. CI runners have throttled storage whose bandwidth
+  # surface is nearly flat, so `plan` correctly concludes that repacking buys
+  # nothing and writes no plan. That is the tool working, not failing. These jobs
+  # test the pipeline's correctness, so they lower the threshold to force a plan
+  # regardless of what the runner's disk happens to be worth.
   end-to-end:
     runs-on: ubuntu-latest
     steps:
@@ -44,9 +50,13 @@ jobs:
           "$OLDPWD/$BIN" probe --corpus-mib 256 --out surf.json
           "$OLDPWD/$BIN" inspect synth.gguf
           "$OLDPWD/$BIN" analyse --model synth.gguf --trace synth.pmxtrace --probe surf.json
-          "$OLDPWD/$BIN" plan --model synth.gguf --trace synth.pmxtrace --probe surf.json --out p.pmxplan
+          "$OLDPWD/$BIN" plan --model synth.gguf --trace synth.pmxtrace --probe surf.json --min-speedup 1.0 --out p.pmxplan
           "$OLDPWD/$BIN" pack --model synth.gguf --plan p.pmxplan --out out.gguf
           "$OLDPWD/$BIN" verify --model synth.gguf --repacked out.gguf --plan p.pmxplan
+          # A permutation moves bytes; it must not add or lose any.
+          a=$(stat -c%s synth.gguf); b=$(stat -c%s out.gguf)
+          test "$a" = "$b" || { echo "FAIL: size changed $a -> $b"; exit 1; }
+          echo "OK: $a bytes in, $a bytes out"
       - name: verification must reject a tampered file
         run: |
           set -euo pipefail
@@ -54,7 +64,7 @@ jobs:
           cd "$(mktemp -d)"
           "$OLDPWD/$BIN" synth --experts 32 --layers 2 --tokens 3000 --top-k 4
           "$OLDPWD/$BIN" probe --corpus-mib 256 --out surf.json
-          "$OLDPWD/$BIN" plan --model synth.gguf --trace synth.pmxtrace --probe surf.json --out p.pmxplan
+          "$OLDPWD/$BIN" plan --model synth.gguf --trace synth.pmxtrace --probe surf.json --min-speedup 1.0 --out p.pmxplan
           "$OLDPWD/$BIN" pack --model synth.gguf --plan p.pmxplan --out out.gguf
           python3 -c "import os; n=os.path.getsize('out.gguf'); f=open('out.gguf','r+b'); f.seek(n//2); f.write(b'\xde\xad\xbe\xef'); f.close()"
           if "$OLDPWD/$BIN" verify --model synth.gguf --repacked out.gguf --plan p.pmxplan; then

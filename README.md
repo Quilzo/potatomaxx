@@ -62,6 +62,11 @@ Two things fall out of that table:
   checkpoints — hundreds of experts per layer — land squarely in that bad
   region once quantised.
 - **Queue depth is worth 6–8× on its own,** and no file layout can influence it.
+- **Some devices offer nothing.** Throttled cloud storage measures nearly flat
+  across request sizes — CI runners here report ~0.41 GB/s from 64 KiB to 32 MiB.
+  On a flat surface no layout can help, and `analyse` says so. That is the tool
+  working correctly, and the reason the threshold is a flag (`--min-speedup`)
+  rather than a constant.
 
 So layout is the *secondary* lever. `potatomaxx` does the part a file can do:
 coalesce the reads. The primary lever — keeping many reads in flight — belongs
