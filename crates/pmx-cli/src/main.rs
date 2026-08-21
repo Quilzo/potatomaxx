@@ -203,7 +203,15 @@ fn load_surface(args: &Args) -> Surface {
             .ok()
             .and_then(|t| Surface::from_json(&t))
         {
-            Some(s) => s,
+            Some(s) => {
+                if !s.cache_bypassed {
+                    eprintln!(
+                        "warning: {p} was measured without page-cache bypass; predicted times \
+                         will be optimistic"
+                    );
+                }
+                s
+            }
             None => {
                 eprintln!("warning: could not read a surface from {p}; costs will be uncalibrated");
                 Surface::default()
@@ -265,6 +273,13 @@ fn cmd_probe(args: &Args) -> Result<(), String> {
             out!("{v:>9.2}");
         }
         outln!("  GB/s");
+    }
+    if !s.cache_bypassed {
+        outln!(
+            "\nWARNING: this platform has no page-cache bypass, so these figures include\n\
+             cached reads and overstate the device. Treat the shape as indicative and the\n\
+             absolute numbers as an upper bound."
+        );
     }
     let peak = s.peak() / 1e9;
     let worst = s

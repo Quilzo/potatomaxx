@@ -634,6 +634,7 @@ mod tests {
         ];
         Surface {
             note: "development machine".into(),
+            cache_bypassed: true,
             cells: raw
                 .iter()
                 .map(|&(b, q, g)| Cell {

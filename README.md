@@ -48,6 +48,13 @@ machine (i5-1235U laptop, NVMe, `O_DIRECT`, random offsets):
 
 *(GB/s. Reproduce with `potatomaxx probe`.)*
 
+> **Platform note.** Cache bypass uses `O_DIRECT`, which is Linux-only — macOS
+> would need `fcntl(F_NOCACHE)` and therefore a `libc` dependency this workspace
+> does not take. Elsewhere the probe still runs but measures *cached* reads,
+> which can be several times the device's real speed. A surface records which
+> happened, and both `probe` and `analyse` warn when the numbers are cached, so
+> they can't be silently mistaken for device figures.
+
 Two things fall out of that table:
 
 - **Request size matters enormously below 256 KiB.** At queue depth 8, going

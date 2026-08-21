@@ -37,15 +37,26 @@
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
+use std::os::unix::fs::FileExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// `O_DIRECT` on Linux/x86-64. Bypasses the page cache so the measurement
-/// reflects the device, not previously cached data.
+/// `O_DIRECT` on Linux. Bypasses the page cache so the measurement reflects the
+/// device, not data the kernel already had in RAM.
+///
+/// There is no portable equivalent. macOS needs `fcntl(F_NOCACHE)`, which would
+/// mean a `libc` dependency this workspace does not take. On platforms without
+/// cache bypass the probe still runs, but reports *cached* bandwidth, which can
+/// be several times the device's real figure. [`Surface::cache_bypassed`] records
+/// which happened so a surface is never mistaken for something it is not.
 #[cfg(target_os = "linux")]
 const O_DIRECT: i32 = 0x4000;
+
+/// Whether this build can bypass the page cache while probing.
+pub const CACHE_BYPASS_AVAILABLE: bool = cfg!(target_os = "linux");
 
 /// Alignment required for `O_DIRECT` buffers and offsets.
 pub const DIRECT_ALIGN: usize = 4096;
@@ -116,6 +127,9 @@ pub struct Surface {
     pub cells: Vec<Cell>,
     /// Free-text note recording what was measured, for provenance.
     pub note: String,
+    /// Whether the page cache was bypassed. When false, the figures are inflated
+    /// by whatever the kernel had cached and must not be read as device speed.
+    pub cache_bypassed: bool,
 }
 
 impl Surface {
@@ -165,7 +179,10 @@ impl Surface {
                 c => s.push(c),
             }
         }
-        s.push_str("\",\n  \"cells\": [\n");
+        s.push_str(&format!(
+            "\",\n  \"cache_bypassed\": {},\n  \"cells\": [\n",
+            self.cache_bypassed
+        ));
         for (i, c) in self.cells.iter().enumerate() {
             s.push_str(&format!(
                 "    {{\"blob_bytes\": {}, \"queue_depth\": {}, \"bytes_per_sec\": {:.0}}}",
@@ -224,7 +241,12 @@ impl Surface {
                 Some(rest[a..b].to_string())
             })
             .unwrap_or_default();
-        Some(Surface { cells, note })
+        let cache_bypassed = !text.contains("\"cache_bypassed\": false");
+        Some(Surface {
+            cells,
+            note,
+            cache_bypassed,
+        })
     }
 }
 
@@ -310,10 +332,16 @@ pub fn measure(cfg: &ProbeConfig) -> std::io::Result<Surface> {
     Ok(Surface {
         cells,
         note: format!(
-            "O_DIRECT random reads over a {} MiB corpus in {}",
+            "{} random reads over a {} MiB corpus in {}",
+            if CACHE_BYPASS_AVAILABLE {
+                "O_DIRECT"
+            } else {
+                "PAGE-CACHED (no O_DIRECT on this platform)"
+            },
             cfg.corpus_bytes >> 20,
             cfg.dir.display()
         ),
+        cache_bypassed: CACHE_BYPASS_AVAILABLE,
     })
 }
 
@@ -401,6 +429,7 @@ mod tests {
     fn surf() -> Surface {
         Surface {
             note: "test".into(),
+            cache_bypassed: true,
             cells: vec![
                 Cell {
                     blob_bytes: 64 << 10,
@@ -447,6 +476,18 @@ mod tests {
             assert!((x.bytes_per_sec - y.bytes_per_sec).abs() < 1.0);
         }
         assert_eq!(b.note, "test");
+        assert!(b.cache_bypassed);
+    }
+
+    #[test]
+    fn a_cached_surface_round_trips_as_cached() {
+        let mut a = surf();
+        a.cache_bypassed = false;
+        let b = Surface::from_json(&a.to_json()).expect("parses");
+        assert!(
+            !b.cache_bypassed,
+            "a page-cached surface must not come back claiming otherwise"
+        );
     }
 
     #[test]
