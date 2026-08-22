@@ -115,11 +115,18 @@ plan that looks cheap by RMSE still needs a real eval before production use.
 
 Kept because they are the most useful output, and each is now a regression test.
 
-**Layout is the secondary lever.** The original design argued for co-activation
-disk layout as the primary win. Measurement disagreed: once a layer's top-k reads
-are issued concurrently, reordering buys 1.1–1.6×, and only for slices in a
-particular size band. Queue depth is worth 6–33×, and no file layout can
-influence it.
+**Layout does not help any real MoE model.** The original design was built around
+it. Measurement first demoted it to the secondary lever — once a layer's top-k
+reads are issued concurrently, reordering only pays for slices under ~256 KiB —
+and then removed the target entirely. A survey of seven real checkpoints
+(`tools/survey-expert-slices.py`) found **none** with expert slices under 256 KiB:
+the smallest, granite, is 288 KiB, and DeepSeek-V2-Lite is 1584 KiB. Even at Q2_K
+only the smallest model crosses the line.
+
+So reordering experts is correct, provably weight-preserving, and useless on
+every checkpoint that currently exists. Queue depth is worth 33× on the same
+hardware and no layout can influence it. What survives is precision, prefetch,
+cache policy and the I/O findings — all independent of slice size.
 
 **Fixed groups read whole are a net loss.** Over-reading a 2 MiB group costs more
 than coalescing saves above ~256 KiB slices. Only coalescing the slices you

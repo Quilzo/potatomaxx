@@ -112,6 +112,60 @@ Reproduce with `potatomaxx compare --a f16.gguf --b q4km.gguf`. The comparison
 needs only one tensor from each file, so an F16 reference can be range-fetched
 rather than downloaded whole.
 
+## The layout lever has no real target
+
+This is the most consequential result here, and it is negative.
+
+`analyse` reporting "leave alone" on granite prompted the obvious question: was
+granite simply too coarse, and would a fine-grained MoE benefit? That is
+answerable without downloading anything. One expert contributes
+`hidden_size × intermediate_size` weights to each of its three matrices, and each
+matrix is read as one slice, so a model's `config.json` — a couple of kilobytes —
+determines its slice size.
+
+Run `tools/survey-expert-slices.py`:
+
+| model | experts | hidden | inter | slice @ Q4_K | in band? |
+|---|---|---|---|---|---|
+| granite-3.0-1b-a400m | 32 | 1024 | 512 | 288 KiB | no |
+| OLMoE-1B-7B | 64 | 2048 | 1024 | 1152 KiB | no |
+| Qwen1.5-MoE-A2.7B | 60 | 2048 | 1408 | 1584 KiB | no |
+| Qwen3-30B-A3B | 128 | 2048 | 768 | 864 KiB | no |
+| DeepSeek-V2-Lite | 64 | 2048 | 1408 | 1584 KiB | no |
+| Mixtral-8x7B | 8 | 4096 | 14336 | 32256 KiB | no |
+| Phi-3.5-MoE | 16 | 4096 | 6400 | 14400 KiB | no |
+
+**Zero of seven.** The measured bandwidth surface plateaus above roughly 256 KiB
+per request; every real MoE checkpoint surveyed sits above it, the smallest by a
+factor of 1.1 and the largest by 126. Even DeepSeek-V2-Lite — the architecture
+usually described as fine-grained — has a 1408-wide expert intermediate, putting
+it at 1584 KiB.
+
+Aggressive quantisation does not rescue it either. At Q2_K (2.6 bits/weight) only
+granite crosses into the band, at 166 KiB; Qwen3-30B-A3B is still 499 KiB.
+
+So the conclusion is not "granite happened to be a poor choice". It is that
+**reordering experts on disk cannot help any mixture-of-experts model that
+currently exists**, because expert matrices are simply larger than the point where
+request size stops mattering. The layout compiler — which is what this project was
+originally built around — has no workload.
+
+What survives that, and why the project still stands:
+
+- **Queue depth**, worth 33× on the same device, which no layout can influence and
+  which most engines leave unclaimed.
+- **Per-expert precision**, which reduces bytes moved regardless of slice size.
+  Granite showed no gain only because it is *already* Q4_K; an F16 or Q8 checkpoint
+  has room.
+- **The cache policy work**, the **router lookahead**, and the **kernel I/O
+  findings**, none of which depend on slice size.
+- **The correctness machinery** — the repacker and `verify` — which is what makes
+  any file transformation safe to attempt at all.
+
+The honest summary is that the project's original thesis was wrong, its
+measurements are what proved it wrong, and what remains is the part that was
+discovered along the way.
+
 ## Where the tool declined to claim a win
 
 `analyse`, on all 24 layers:
@@ -171,10 +225,10 @@ as a separate figure rather than folded into the total.
   main thing being asked for upstream.
 - **No end-to-end tokens per second.** There is still no attention, KV cache or
   sampler here; `bench` reports a ceiling on decode rate, not a decode rate.
-- **A model where layout should help has not been tested.** Granite's slices are
-  too large to benefit. The interesting case is fine-grained MoE with hundreds of
-  small experts, where slices land in the 16–128 KiB band. Qwen3-30B-A3B or
-  DeepSeek-shaped models are the test that would either support or sink the layout
-  argument.
+- **No model exists where layout should help.** Settled above: seven real
+  checkpoints surveyed, none with slices under 256 KiB. If a future architecture
+  uses much narrower expert matrices this changes, and the survey tool is there to
+  check. Until then the layout path should be regarded as machinery that works
+  correctly on a problem nobody has.
 - **Quality is measured as round-trip error, not perplexity.** A precision plan
   that looks cheap by RMSE still needs a real evaluation.

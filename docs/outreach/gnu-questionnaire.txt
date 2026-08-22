@@ -201,10 +201,23 @@ Before sending, resolve the one bracketed item below.
        same model as ground truth: correlation 0.997 for Q4_K and 0.9998 for
        Q6_K, with relative errors of 7.6% and 1.9% -- the ratio their
        bit-widths predict.
-     - On this model the program reported that reordering would buy nothing,
-       on every layer, because its expert slices are larger than the point
-       where request size stops mattering. That is the correct answer and we
-       would rather it said so than manufacture a number.
+     - On this model the program reported that reordering would buy nothing, on
+       every layer, because its expert slices are larger than the point where
+       request size stops mattering.
+
+       We then checked whether ANY real model would benefit, by computing
+       expert slice sizes from the published configs of seven mixture-of-experts
+       checkpoints (tools/survey-expert-slices.py). None of them is in the range
+       where reordering helps. So the transformation the program was originally
+       built around is correct, provably weight-preserving, and of no use to any
+       checkpoint that currently exists. We report this because it is true and
+       because a measurement tool that only reports favourable results cannot be
+       trusted when it reports one.
+
+       What survives that finding, and what the program is now for: raising I/O
+       queue depth (worth 33x on our test device, and independent of layout),
+       per-expert precision allocation, cache policy, and router lookahead --
+       none of which depend on expert slice size.
 
    What is still missing: the routing traces used are synthetic. Obtaining real
    ones requires dumping a router's top-k from a running inference engine, which
