@@ -4,6 +4,24 @@ A survey of current MoE-inference research against this project's actual state.
 Ordered by value, with the reasoning and the citations, because "add a feature"
 without evidence is how the layout compiler happened.
 
+The strategic conclusion first, because it reframes the rest: **the differentiator
+is not an optimisation, it is the willingness to say no.** Every comparable tool —
+Colibri, MoE-Infinity, llama.cpp's streaming work, MC-MoE, BitsMoE — is an
+optimiser that assumes its transformation helps. This project has now measured four
+plausible optimisations as not worth doing, including two of its own:
+
+| idea | verdict | evidence |
+|---|---|---|
+| reorder experts by co-activation | **useless** | no real model has slices under the 256 KiB plateau |
+| lossless entropy coding of the store | **2%** on k-quants | nibble entropy 3.861 of 4.000 |
+| LFU expert cache | **worse than LRU** | 78.4% vs 80.9% of the offline optimum |
+| repack real Granite | **leave alone**, all 24 layers | 420 KiB slices, above the plateau |
+
+Each of those would have been weeks of work for nothing. `potatomaxx advise`
+exists to produce that verdict cheaply, per model and per device, and is the
+feature least likely to be duplicated — because it requires being willing to
+report that your own idea does not work.
+
 Context: the layout transformation this project was built around
 [helps no real model](REAL-MODEL-RESULTS.md). What survives is queue depth,
 per-expert precision, prefetch prediction, cache policy, and the correctness
@@ -128,7 +146,44 @@ byte on the measured device — rather than accuracy per byte *stored*, and driv
 it from the operator's own runtime traces rather than a calibration set. That is
 a real difference in objective, not a new idea about frequency.
 
-## 6. Rotation before quantisation, if pushing below 3 bits
+## 6. Lossless entropy coding — measured, and it does not pay here
+
+**Status: investigated and rejected for quantised stores. Kept because the
+negative result is worth having.**
+
+The literature is encouraging at first glance:
+[EntroLLM](https://arxiv.org/html/2505.02380) reports Huffman coding taking 4-bit
+weights to 1.39 effective bits with a 146% generation-latency improvement;
+[DFloat11](https://arxiv.org/pdf/2504.11651) gets 70% size at 100% accuracy; ZipNN
+takes FP16 from 16 to ~11 bits per parameter. And the objection usually raised —
+that entropy decoding is serial and ill-suited to GPU SIMT, and that decompressing
+to memory before the kernel erodes the bandwidth saving — is a *GPU* objection.
+This project is CPU-only with idle cores and controls its own read path, so
+trading spare compute for scarce disk bandwidth is exactly the right trade here.
+
+So it was measured, on real Granite weights:
+
+| source | zlib | lzma | effective bits | saving |
+|---|---|---|---|---|
+| F16 | 0.773 | 0.719 | 16 → 11.50 | **28.1%** |
+| Q4_K | 0.979 | 0.981 | 4.5 → 4.41 | **2.1%** |
+
+Nibble entropy in real Q4_K is **3.861 bits against 4.000 uniform** — 3.5%
+redundancy, and no coder can beat the entropy.
+
+The reason is structural, and worth stating because it generalises: **a good
+quantiser has already spent that redundancy.** K-quants fit an asymmetric
+scale and minimum per 32-element sub-block, which is precisely a transform that
+drives the residual distribution toward uniform. The large published gains are on
+*float* weights, where the exponent field is highly redundant — and the F16 column
+above reproduces ZipNN's 16→11 bpp independently, which is a useful check that the
+measurement method is sound.
+
+Verdict: not worth a decode path for a k-quant store. Worth roughly 28% for
+someone streaming an F16 checkpoint, which is a real but narrow case.
+`potatomaxx advise` now measures this per model and says which case you are in.
+
+## 7. Rotation before quantisation, if pushing below 3 bits
 
 **Status: worth considering, not urgent.**
 
@@ -142,7 +197,7 @@ first choice — the point was to test bit *allocation*, not to compete on
 quantisers. But if the cold tier is to go to 2–3 bits on real models, a rotation
 step is the cheapest available quality recovery.
 
-## 7. The things deliberately not on this list
+## 8. The things deliberately not on this list
 
 - **An inference engine.** Attention, KV cache and a sampler would give
   end-to-end tokens/sec, and would duplicate mature work. See

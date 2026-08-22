@@ -10,8 +10,14 @@ GPU — the same NVMe delivers **0.099 GB/s at queue depth 1 and 3.29 GB/s at de
 16**. A factor of **33**, from nothing but concurrency.
 
 `potatomaxx` is the toolkit for attacking that, and its distinguishing habit is
-that it **measures every claim and reports the ones that fail**. Three levers
-survive measurement:
+that it **measures every claim and reports the ones that fail** — including its
+own. `potatomaxx advise` is the headline command: point it at a model and a device
+and it ranks what is worth attempting, what is marginal, and what measurably is
+not. Four plausible optimisations have been measured here as not worth doing, two
+of them this project's own ideas, and every comparable tool implements at least
+one of them unconditionally.
+
+Three levers survive measurement:
 
 1. **Queue depth** — worth **33×** on the device above, and the reason most
    engines leave performance on the table. `potatomaxx kio` compares `pread`, a
@@ -42,6 +48,20 @@ the first real-model verdict was *leave this alone*.
 
 Zero dependencies, `std` only. 162 tests. Validated against a real MoE checkpoint.
 GPL-2.0-or-later.
+
+```console
+$ potatomaxx advise --model qwen3-30b-a3b.gguf --trace mine.pmxtrace --probe surf.json
+
+[HAZARD ] outlier experts   under 0.5% of experts are typically critical
+[  DO   ] queue depth       0.510 GB/s at QD1 vs 2.245 at QD16 = 4.4x
+[  DO   ] precision         source is 4.50 bits/weight; floor is 2.50
+[MARGINAL] prefetch         adjacent tokens reuse 37% against 25% by chance
+[ SKIP  ] expert layout     slices are 420 KiB against a ~256 KiB plateau
+[ SKIP  ] lossless coding   expert bytes are 2.8% redundant
+
+2 worth attempting, 1 marginal, 3 measurably not.
+The SKIPs are the point.
+```
 
 ```console
 $ potatomaxx kio

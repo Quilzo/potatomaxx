@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod advise_cmd;
 mod compare_cmd;
 mod engine_cmds;
 mod kio_cmd;
@@ -60,6 +61,7 @@ USAGE
   potatomaxx <command> [options]
 
 COMMANDS
+  advise       Say which optimisations are worth attempting on this model and device
   probe        Measure this device's read bandwidth surface (blob size x queue depth)
   kio          Compare kernel I/O paths: pread, thread pool, io_uring, RWF_DONTCACHE
   predict      Compare router-lookahead predictors on a trace
@@ -95,6 +97,10 @@ OPTIONS
                                  from layer n-1, and so prefetchable
            --no-scatter          keep planted clusters on contiguous expert ids
                                  (unrealistic: makes the existing order optimal)
+
+  advise   --model <path> [--trace <path>] [--probe <path>] [--cache-mib <n>]
+           Runs every check the inputs allow and ranks the results: hazards
+           first, then what is worth doing, then what measurably is not.
 
   inspect  <model.gguf>
 
@@ -210,6 +216,7 @@ fn main() -> ExitCode {
         "plan" => cmd_plan(&args),
         "pack" => cmd_pack(&args),
         "verify" => cmd_verify(&args),
+        "advise" => cmd_advise(&args),
         "kio" => cmd_kio(&args),
         "compare" => cmd_compare(&args),
         "predict" => cmd_predict(&args),
@@ -292,6 +299,16 @@ fn cmd_compare(args: &Args) -> Result<(), String> {
         args.req("b")?,
         args.get("tensor"),
         args.num("limit", 12)?,
+    )
+}
+
+fn cmd_advise(args: &Args) -> Result<(), String> {
+    let surface = load_surface(args);
+    advise_cmd::run(
+        args.req("model")?,
+        args.get("trace"),
+        &surface,
+        args.num("cache-mib", 64)?,
     )
 }
 
