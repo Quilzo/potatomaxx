@@ -51,9 +51,17 @@ body below the `To:`/`Subject:` lines, and **turn off rich formatting** (the
 `Aa` / "plain text mode" toggle) before sending. Kernel lists silently drop HTML
 mail.
 
-Subscribe first, or replies will be missed:
-- <https://subspace.kernel.org/vger.kernel.org.html> for `io-uring`
-- <https://kvack.org/majordomo/> for `linux-mm`
+Subscribe first, or replies will be missed. vger no longer runs majordomo — each
+list has its own subscribe address:
+
+```
+io-uring:   send any mail to  io-uring+subscribe@vger.kernel.org
+linux-mm:   mail majordomo@kvack.org with body:  subscribe linux-mm
+```
+
+Then reply to the confirmation each sends back. Neither list requires
+subscription in order to post, but replies go to the list, so posting unsubscribed
+means missing the answers you asked for.
 
 ## Before sending any of it
 
