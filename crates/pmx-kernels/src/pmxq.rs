@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! potatomaxx native block formats.
 //!
 //! # Why not just reuse the k-quants

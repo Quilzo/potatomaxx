@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Dequantising GGUF block formats to `f32`.
 //!
 //! These must match ggml's `dequantize_row_*` bit for bit: everything

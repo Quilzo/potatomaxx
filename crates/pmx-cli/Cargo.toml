@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 [package]
 name = "pmx-cli"
 description = "The potatomaxx command line tool."
@@ -20,6 +21,7 @@ pmx-partition = { path = "../pmx-partition" }
 pmx-plan = { path = "../pmx-plan" }
 pmx-cache = { path = "../pmx-cache" }
 pmx-kernels = { path = "../pmx-kernels" }
+pmx-kio = { path = "../pmx-kio" }
 pmx-predict = { path = "../pmx-predict" }
 pmx-runtime = { path = "../pmx-runtime" }
 pmx-store = { path = "../pmx-store" }

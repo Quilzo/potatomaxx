@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 [package]
 name = "pmx-probe"
 description = "Measures the storage bandwidth surface (blob size x queue depth) that layout decisions depend on."

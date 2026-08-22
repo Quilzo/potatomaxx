@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 [package]
 name = "pmx-runtime"
 description = "Streaming expert-fetch runtime: lookahead prefetch, cost-aware cache, measured throughput."

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 [package]
 name = "pmx-predict"
 description = "Router lookahead: predicting which experts a layer will select, early enough to prefetch them."

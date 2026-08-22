@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Routing traces and the co-activation statistics derived from them.
 //!
 //! A trace records, for every generated token and every MoE layer, which

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Commands for the streaming path: predictor evaluation, store construction,
 //! and replay benchmarking.
 

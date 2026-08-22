@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! GGML tensor type table.
 //!
 //! Every entry is `(block_elements, block_bytes)`. A tensor holding `n` elements

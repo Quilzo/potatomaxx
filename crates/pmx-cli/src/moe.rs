@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Recognising MoE structure in a GGUF checkpoint.
 //!
 //! GGUF names expert tensors `blk.<n>.ffn_{gate,up,down}_exps.weight`, stacking

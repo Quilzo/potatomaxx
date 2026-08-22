@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! IEEE 754 half precision, in safe integer arithmetic.
 //!
 //! `f16` is still unstable in Rust, and this crate takes no dependencies, so the

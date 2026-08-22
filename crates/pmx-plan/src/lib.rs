@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Deciding where each expert lives and how many bits it keeps.
 //!
 //! # The objective, and why it is not the usual one

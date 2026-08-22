@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 [package]
-name = "pmx-trace"
-description = "Routing-trace capture, co-activation statistics, and synthetic trace generation for MoE models."
+name = "pmx-kio"
+description = "Kernel I/O paths for expert streaming: io_uring, RWF_DONTCACHE, huge pages, residency queries."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

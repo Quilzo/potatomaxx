@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! The streaming expert-fetch runtime.
 //!
 //! # What this measures, and what it does not

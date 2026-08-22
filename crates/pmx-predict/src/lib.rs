@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Router lookahead.
 //!
 //! # Why prediction is the whole game

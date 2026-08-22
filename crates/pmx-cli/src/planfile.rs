@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! The plan file: a human-readable record of what `pack` will do.
 //!
 //! Plans are text on purpose. A plan authorises rewriting a multi-gigabyte

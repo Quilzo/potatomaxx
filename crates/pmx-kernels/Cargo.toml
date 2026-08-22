@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 [package]
 name = "pmx-kernels"
 description = "Dequantisation of GGUF block formats, potatomaxx native block formats, and SIMD int8 dot products."

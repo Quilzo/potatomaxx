@@ -1,5 +1,21 @@
 # Contributing
 
+## Sign your work
+
+Patches need a `Signed-off-by:` line — `git commit -s` adds it. This is the
+kernel's [Developer's Certificate of
+Origin](https://docs.kernel.org/process/submitting-patches.html#sign-your-work-the-developer-s-certificate-of-origin):
+you are certifying that you wrote the contribution or otherwise have the right to
+submit it under the project's licence. It is used here for the same reason the
+kernel uses it, and because this project hopes to interoperate with that
+community.
+
+New files need an SPDX identifier as their first line:
+
+```rust
+// SPDX-License-Identifier: GPL-2.0-or-later
+```
+
 ## The one rule
 
 **A repacked model must hold exactly the original weights.** `potatomaxx`
@@ -33,7 +49,9 @@ priority bug in the project.
 ## Running things
 
 ```bash
-cargo test                 # 42 tests, no network, no fixtures needed
+cargo test                 # 160 tests, no network, no fixtures needed; debug
+                           # builds enable integer overflow checks, so run both
+cargo test --release
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Measuring the storage bandwidth surface a layout plan is optimised against.
 //!
 //! Every decision `potatomaxx` makes rests on one empirical fact: the read

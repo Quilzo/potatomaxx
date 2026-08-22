@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Int8 dot products, the inner loop of quantised matrix multiply.
 //!
 //! Decode of a quantised weight block is fused into the dot product: the weights

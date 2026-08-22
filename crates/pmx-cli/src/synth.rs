@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Building a small synthetic MoE checkpoint and a matching routing trace.
 //!
 //! The whole pipeline — detect, analyse, plan, pack, verify — should be

@@ -13,6 +13,7 @@ dependencies = [
  "pmx-cache",
  "pmx-gguf",
  "pmx-kernels",
+ "pmx-kio",
  "pmx-partition",
  "pmx-plan",
  "pmx-predict",
@@ -28,6 +29,10 @@ version = "0.1.0"
 
 [[package]]
 name = "pmx-kernels"
+version = "0.1.0"
+
+[[package]]
+name = "pmx-kio"
 version = "0.1.0"
 
 [[package]]

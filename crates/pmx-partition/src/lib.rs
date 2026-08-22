@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Choosing an expert order, and honestly costing the choice.
 //!
 //! # What layout can and cannot do

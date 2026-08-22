@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! Strict, zero-dependency GGUF reading and offset-rewriting.
 //!
 //! # Why this exists

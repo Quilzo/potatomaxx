@@ -1,175 +1,157 @@
 # potatomaxx
 
-**A layout compiler and streaming toolkit for disk-resident mixture-of-experts models.**
+**Make a mixture-of-experts model cheaper to *read*, so it runs on hardware that
+cannot hold it.**
 
-`potatomaxx` reads a GGUF MoE checkpoint and a routing trace, works out an expert
-order that turns scattered slice reads into contiguous runs, and rewrites the
-file. The output is a **drop-in GGUF** — same tensor names, same shapes,
-byte-identical weights, different offsets — so whatever engine you already use
-reads it unchanged and gets faster.
+A big MoE checkpoint does not fit in RAM, so it is read from storage while it
+runs. That makes decoding a storage problem, and storage cares enormously about
+*how* you ask. On the development machine — an i5-1235U laptop, 7.6 GB RAM, no
+GPU — the same NVMe delivers **0.099 GB/s at queue depth 1 and 3.29 GB/s at depth
+16**. A factor of **33**, from nothing but concurrency.
 
-Beyond layout it carries the streaming machinery that layout alone cannot reach:
-per-expert mixed precision, router-lookahead prefetch, a cost-aware expert cache,
-and a replay harness that measures the fetch path end to end.
+`potatomaxx` attacks that in three ways, and measures each rather than asserting
+it:
 
-It also tells you, honestly, when there is nothing to gain — and it did exactly
-that several times while being built. The measurements below include the ones
-that contradicted the design.
+1. **Layout** — reorder experts on disk so the ones that fire together are
+   adjacent, turning scattered slice reads into contiguous runs. Output is a
+   **drop-in GGUF**: same tensor names, same shapes, byte-identical weights.
+   llama.cpp, Colibri and anything else read it unchanged.
+2. **Precision** — store each expert at its own bit width, chosen from *measured*
+   quantisation error and how often the expert is actually used. 3.58× less
+   weight movement at 0.31× the size on the synthetic model.
+3. **Prefetch** — predict which experts a layer will select before its router has
+   run, because you cannot queue reads you have not predicted.
+
+Zero dependencies, `std` only. 160 tests. GPL-2.0-or-later.
 
 ```console
-$ potatomaxx analyse --model qwen3-30b-a3b.gguf --trace mine.pmxtrace --probe pmx-probe.json
+$ potatomaxx kio
+     engine    QD        GB/s cached@start      flags
+      pread     1       0.099          3%          -
+    threads    16       3.291          4%          -
+uring-stream    16       1.544          5%          -
+uring-stream    16       0.795          4%  DONTCACHE
 
- layer   experts    req/token        after   speedup  verdict
-     0       128        16.24         7.64     2.00x  repack
-     1       128        16.24         7.63     1.99x  repack
-     2       128        16.19         7.56     2.00x  repack
-
-mean predicted speedup in expert read time: 2.00x
+best: threads at QD16 — 3.291 GB/s, 33.1x the depth-1 baseline
 ```
 
 ---
 
-## Why this exists
+## Quick start, no model download required
 
-A GGUF MoE layer stacks its experts into a few tensors — usually
-`ffn_gate_exps`, `ffn_up_exps`, `ffn_down_exps` — with the expert index as the
-last axis. Fetching the top-k experts for one token therefore means reading `k`
-slices out of each: `k × n_tensors` scattered requests, at whatever size one
-expert's slice happens to be.
+```bash
+cargo build --release
 
-Storage does not serve all request shapes equally. Measured on the development
-machine (i5-1235U laptop, NVMe, `O_DIRECT`, random offsets):
+potatomaxx synth                        # synthetic MoE checkpoint + routing trace
+potatomaxx kio                          # which kernel I/O path is fastest here
+potatomaxx probe --out surf.json        # this device's bandwidth surface
+potatomaxx analyse --model synth.gguf --trace synth.pmxtrace --probe surf.json
+potatomaxx plan    --model synth.gguf --trace synth.pmxtrace --probe surf.json --out p.pmxplan
+potatomaxx pack    --model synth.gguf --plan p.pmxplan --out packed.gguf
+potatomaxx verify  --model synth.gguf --repacked packed.gguf --plan p.pmxplan
+```
 
-|    blob |   QD1 |   QD4 |   QD8 |  QD16 |
-|--------:|------:|------:|------:|------:|
-|   4 KiB |  0.02 |  0.06 |  0.09 |  0.13 |
-|  16 KiB |  0.06 |  0.16 |  0.25 |  0.48 |
-|  32 KiB |  0.08 |  0.35 |  0.57 |  0.83 |
-|  64 KiB |  0.15 |  0.38 |  0.61 |  0.91 |
-| 256 KiB |  0.35 |  1.24 |  1.82 |  2.16 |
-|   1 MiB |  0.91 |  2.46 |  2.51 |  2.61 |
-|   2 MiB |  1.03 |  2.09 |  2.54 |  2.67 |
-|   8 MiB |  1.55 |  2.40 |  2.26 |  2.18 |
-|  32 MiB |  1.95 |  2.38 |  1.92 |  1.17 |
+Twelve commands, all exercised in CI: `probe`, `kio`, `predict`, `build-store`,
+`bench`, `synth`, `inspect`, `analyse`, `plan`, `pack`, `verify`, `help`.
 
-*(GB/s. Reproduce with `potatomaxx probe`.)*
-
-> **Platform note.** Cache bypass uses `O_DIRECT`, which is Linux-only — macOS
-> would need `fcntl(F_NOCACHE)` and therefore a `libc` dependency this workspace
-> does not take. Elsewhere the probe still runs but measures *cached* reads,
-> which can be several times the device's real speed. A surface records which
-> happened, and both `probe` and `analyse` warn when the numbers are cached, so
-> they can't be silently mistaken for device figures.
-
-Two things fall out of that table:
-
-- **Request size matters enormously below 256 KiB.** At queue depth 8, going
-  from 16 KiB to 256 KiB requests is worth **7.3×**. Fine-grained MoE
-  checkpoints — hundreds of experts per layer — land squarely in that bad
-  region once quantised.
-- **Queue depth is worth 6–8× on its own,** and no file layout can influence it.
-- **Some devices offer nothing.** Throttled cloud storage measures nearly flat
-  across request sizes — CI runners here report ~0.41 GB/s from 64 KiB to 32 MiB.
-  On a flat surface no layout can help, and `analyse` says so. That is the tool
-  working correctly, and the reason the threshold is a flag (`--min-speedup`)
-  rather than a constant.
-
-So layout is the *secondary* lever. `potatomaxx` does the part a file can do:
-coalesce the reads. The primary lever — keeping many reads in flight — belongs
-to an inference runtime, and this project deliberately does not try to be one.
-
-## Why permuting experts is safe
+## Why a repack is safe
 
 Permuting the expert axis is a **relabelling**. If new slot `j` holds old expert
 `perm[j]`, and the router's weight rows are permuted by the same `perm`, then the
 logit computed for slot `j` is exactly the logit the original model computed for
-expert `perm[j]`. Top-k selects the same real experts, and each selected slot
-holds that expert's original bytes. The function computed is unchanged, bit for
-bit.
+expert `perm[j]`. Top-k selects the same real experts, from the same bytes. The
+function computed is unchanged, bit for bit.
 
-The GGUF spec permits the file-level half of this: tensor data is located only
-through the `offset` in its `tensor_info`, physical order is unconstrained, and
-padding between tensors is explicitly allowed.
+The GGUF specification permits the file-level half of this: tensor data is located
+only through the `offset` in its `tensor_info`, physical order is unconstrained,
+and inter-tensor padding is explicitly allowed.
 
-`potatomaxx verify` proves it after the fact, reading both files in full and
-checking every tensor slice-by-slice. It is strict — flipping four bytes anywhere
-in a repacked file fails it.
+`potatomaxx verify` proves it afterwards, reading both files in full and comparing
+every expert slice. It is strict — flipping four bytes anywhere fails it, and CI
+asserts that.
 
 ```console
-$ potatomaxx verify --model synth.gguf --repacked synth.pmx.gguf --plan synth.pmxplan
+$ potatomaxx verify --model synth.gguf --repacked packed.gguf --plan p.pmxplan
   13 tensors compared, 1 byte-identical, 12 matched as a permutation
-  9.08 MiB of weights confirmed unchanged
+  12.10 MiB of weights confirmed unchanged
 OK — the repacked file holds exactly the original weights.
 ```
 
-## Try it without downloading a model
+## What is measured, and what is not
 
-```bash
-cargo build --release
-cd /tmp
+This distinction is the point of the project, so it comes before the features.
 
-potatomaxx synth                      # small synthetic MoE checkpoint + trace
-potatomaxx probe --out surf.json      # measure your device (writes then deletes a scratch file)
-potatomaxx inspect synth.gguf
-potatomaxx analyse --model synth.gguf --trace synth.pmxtrace --probe surf.json
-potatomaxx plan    --model synth.gguf --trace synth.pmxtrace --probe surf.json --out p.pmxplan
-potatomaxx pack    --model synth.gguf --plan p.pmxplan --out synth.pmx.gguf
-potatomaxx verify  --model synth.gguf --repacked synth.pmx.gguf --plan p.pmxplan
-```
+| Claim | Status |
+|---|---|
+| Bandwidth surface, engine comparison, queue-depth scaling | **Measured** on the development machine |
+| `verify` proves byte-identical weights | **Measured** — tests, plus a tamper control in CI |
+| Predictor recall | **Measured** on the given trace, held out from fitting |
+| Cache policy comparison | **Measured** against the offline optimum |
+| Per-expert precision: size and movement | **Measured** (error), **computed** (movement, from the surface) |
+| Expert-fetch throughput (`bench`) | **Computed** from the measured surface + a replayed trace |
+| Speedup on *your* model | **Unknown until you run `analyse`** — that is what it is for |
+| End-to-end generated tokens/sec | **Not measured.** There is no attention, KV cache or sampler here |
 
-The plan is a text file. It authorises rewriting a multi-gigabyte model, so you
-should be able to read exactly what will happen before it does:
+`bench` reports a *ceiling* on decode rate, not a decode rate. On a memory-bound
+machine that ceiling is the binding constraint, which is why it was built first.
+Quality is measured as round-trip error, which is **not** perplexity: a precision
+plan that looks cheap by RMSE still needs a real eval before production use.
 
-```
-pmxplan 1
-model qwen3-30b-a3b.gguf
-trace mine.pmxtrace
+## Findings that contradicted the design
 
-layer 0 experts 128 speedup 1.9991 requests 16.24 -> 7.64
-tensors blk.0.ffn_gate_exps.weight,blk.0.ffn_up_exps.weight,blk.0.ffn_down_exps.weight,blk.0.ffn_gate_inp.weight
-perm 34,55,53,10,56,43,42,20,46,62,8,0,12,4,61,3,...
-```
+Kept because they are the most useful output, and each is now a regression test.
 
-## Getting a real trace
+**Layout is the secondary lever.** The original design argued for co-activation
+disk layout as the primary win. Measurement disagreed: once a layer's top-k reads
+are issued concurrently, reordering buys 1.1–1.6×, and only for slices in a
+particular size band. Queue depth is worth 6–33×, and no file layout can
+influence it.
 
-`potatomaxx` needs to know which experts your workload actually selects. The
-text format is one line per `(token, layer)`, so patching an engine to emit it is
-a small change:
+**Fixed groups read whole are a net loss.** Over-reading a 2 MiB group costs more
+than coalescing saves above ~256 KiB slices. Only coalescing the slices you
+actually need pays.
 
-```
-# token layer experts...
-0 0 12 44 7 91
-0 1 3 55 8 12
-1 0 12 44 9 91
-```
+**GDSF beats LRU — but only when cost per byte varies.** It reaches 90.7% of the
+offline optimum against LRU's 80.9% on skewed routing. Its key contains
+`cost / size`, though, so at a fixed bandwidth (`cost = bytes / rate`) that term
+is constant and it collapses to LFU — which is *worse* than LRU. Cost-awareness
+pays across storage tiers, not within one.
 
-Feed it in with `--trace`. Traces from *your* workload beat a generic
-calibration corpus: routing is workload-specific, and so is the layout that
-suits it.
+**Prefetching is not free.** Every prediction is a real read, charged whether the
+router wants it or not. Throughput peaks near `top_k` and then falls while recall
+keeps climbing. In one configuration plain on-demand LRU beat every prefetch
+setting, so `bench --compare` sweeps rather than declaring a winner.
 
-## The streaming path
+**A loss budget relative to the baseline is degenerate.** Once sensitivity is
+measured the baseline *is* the reference and its error is zero — so any multiple
+of it permits nothing, and the allocator refuses every demotion while still
+reporting success. Replaced with a uniform-precision ceiling (`--error-bits`).
 
-Layout keeps a checkpoint a drop-in GGUF. Everything else needs a container GGUF
-cannot express — **per-expert precision is impossible in GGUF**, because a tensor
-carries one `ggml_type` and a MoE layer's experts share a tensor. So there are two
-paths, deliberately separate:
+**io_uring lost to a thread pool here.** Driven as batch-and-drain it peaked at
+QD8 and then declined; fixing that to a sliding window gained +148% at QD8, and it
+still lost to 16 threads (1.54 vs 3.29 GB/s). One ring submitting and reaping from
+one thread is not enough where the block path is virtualised. `kio` therefore
+*recommends from the measurement* instead of preferring an interface.
 
-| path | output | consumed by | gives you |
-|---|---|---|---|
-| layout only | drop-in GGUF | llama.cpp, Colibri, anything | fewer, larger reads |
-| + per-expert precision | `.pmxstore` | `potatomaxx bench` | fewer *bytes* |
+**`RWF_DONTCACHE` is 49% slower, and worth it anyway.** It is not a throughput
+optimisation. It declines to retain pages nothing will read again — 7.4% page-cache
+residency instead of filling RAM — so the cost of a streaming read falls on this
+process rather than on everything else on the machine.
 
-```bash
-potatomaxx predict     --trace mine.pmxtrace              # which lookahead works
-potatomaxx build-store --model m.gguf --trace mine.pmxtrace --out m.pmxstore
-potatomaxx bench       --store m.pmxstore --trace mine.pmxtrace --compare
-```
+## Features
 
-### Per-expert precision, allocated from measured error
+### Layout compiler
 
-`build-store` dequantises each expert, measures the round-trip error of *every*
-candidate precision on that expert's real weights, and allocates bits to minimise
-expected error under a movement budget. On the synthetic 128-expert model:
+`analyse` scores the checkpoint's existing expert order against an optimised one,
+costed against a measured bandwidth surface, and says plainly when the gain is not
+worth rewriting a file for. `plan` writes a reviewable text plan; `pack` applies
+it; `verify` proves it.
+
+### Per-expert precision
+
+Impossible in GGUF — a tensor carries one `ggml_type` and a MoE layer's experts
+share a tensor — so `build-store` emits a native `.pmxstore`. Bits follow
+**access frequency and tier cost**, from real per-expert round-trip error:
 
 ```
 block  0: 128 experts, 9.0% resident, movement 3.58x faster, expected error 0.02001
@@ -178,198 +160,174 @@ weights are 0.31x the source for the same experts
 precision mix: pmxq3=60 pmxq4=588 pmxq8=120
 ```
 
-Hot experts keep 8 bits, cold ones drop to 3 — bits follow *access frequency and
-tier cost*, not structural role. The nearest prior art,
-[APEX-Quant](https://github.com/localai-org/apex-quant), allocates by role
-(shared vs routed) and layer position and uses no runtime traces.
+Hot experts keep 8 bits, cold ones drop to 3. The nearest prior art,
+[APEX-Quant](https://github.com/localai-org/apex-quant), allocates by structural
+role and layer position and uses no runtime traces.
 
-Two things it deliberately will not do:
-
-- **Routers are never requantised.** Quantisation error in a router perturbs
-  expert *selection* — the "expert shift" problem — which would invalidate the
-  very trace the plan came from. Routers stay in the GGUF at source precision.
-- **The error budget is not a multiple of the baseline.** Once sensitivity is
-  measured the baseline *is* the reference and its error is zero, so any multiple
-  of zero permits nothing: the allocator would refuse every demotion and still
-  report success. `--error-bits 4.5` instead means "no worse than storing
-  everything at 4.5 bits", which is how the decision is actually reasoned about.
+**Routers are never requantised.** Quantisation error in a router perturbs expert
+*selection* — the "expert shift" problem — which would invalidate the very trace
+the plan came from.
 
 ### Router lookahead
 
-Prefetching needs to know which experts a layer will pick *before* its router has
-run. These predictors are training-free — they use only routing history a running
-engine already has:
+Training-free, using only routing history a running engine already has:
 
 | predictor | recall @ 1× top-k | @ 2× | @ 4× |
 |---|---|---|---|
 | frequency (baseline) | 0.100 | 0.199 | 0.386 |
 | sticky | 0.415 | 0.483 | 0.604 |
-| markov | 0.329 | 0.479 | 0.593 |
 | **sticky+markov** | **0.415** | **0.629** | **0.739** |
 
-*(chance is 0.100; synthetic 64-expert trace with planted temporal structure.)*
+Chance is 0.100. 0.739 at 4× budget is roughly what PILOT-style single-layer
+lookahead reports (71.6%), with no trained head. Trained pre-attention routers
+reach 93–98% and it would be dishonest to imply parity. `predict` scores whichever
+you use on your own trace.
 
-0.739 at 4× budget is roughly what PILOT-style single-layer lookahead reports
-(71.6%, improved to 76.7% by folding the shared expert into the residual first),
-with no trained head. Trained pre-attention routers do considerably better —
-93.0% on DeepSeek-V2-Lite, 94.7% on Qwen3-30B, 97.6% on Phi-mini-MoE — and it
-would be dishonest to imply otherwise. `potatomaxx predict` scores whichever you
-use on *your* trace.
+### Kernel I/O
 
-### The expert cache, and where cost-awareness stops helping
+Probed at runtime, never inferred from a version string — distributions backport,
+containers lie, and `RWF_DONTCACHE` additionally needs the filesystem to have
+opted in via `FOP_DONTCACHE`.
 
-Expert caches almost universally use LRU. Measured against the offline optimum on
-skewed routing with uniform cost:
+| mechanism | since | why this workload wants it |
+|---|---|---|
+| io_uring, sliding window | 5.1 | depth without a thread per outstanding read |
+| `RWF_DONTCACHE` | 6.14 | stream cold weights without evicting everything else |
+| `MADV_HUGEPAGE` | — | the resident hot set is read every token |
+| `MADV_RANDOM` | — | readahead bets the next block is wanted; a router decides otherwise |
+| `cachestat(2)` | 6.5 | verify residency rather than assume it |
 
-| policy | hit rate | % of optimum | fetch time |
-|---|---|---|---|
-| LRU | 0.508 | 80.9% | 9834s |
-| LFU | 0.493 | 78.4% | 10140s |
-| **GDSF** | **0.570** | **90.7%** | **8598s** |
+See [docs/KERNEL.md](docs/KERNEL.md) for what can and cannot be upstreamed, and
+why an inference engine does not belong in the kernel.
 
-Note LFU is *worse* than LRU — unaged frequency counts let an early-hot entry
-ossify, and GDSF's inflation term is what fixes that.
+## Getting a real trace
 
-But the honest limitation, found by measurement: **GDSF's advantage disappears
-when fetch cost is proportional to size.** Its key contains `cost / size`, so at a
-fixed bandwidth (`cost = bytes / rate`) that term is constant, cancels, and GDSF
-collapses to LFU. Cost-awareness pays only where cost *per byte* varies — across
-storage tiers (a disk byte costs ~12× a RAM byte here), or via the small-request
-penalty the bandwidth surface shows. Where neither holds, LRU is the better
-default and `bench --compare` will show it.
-
-### Replay: what the fetch path actually delivers
+`potatomaxx` needs to know which experts *your* workload selects. The text format
+is one line per `(token, layer)`, so patching an engine to emit it is a small
+change:
 
 ```
---- prefetch budget sweep (gdsf, sticky+markov) ---
- budget   hit rate  bytes/token      useful     tok/s
-   none      0.284       693333        0.0%    108.70
-      8      0.488      1032022       45.3%    128.93
-     16      0.719      2216616       36.1%    125.18
-     32      0.749      4131158       18.8%     82.75
+# token layer experts...
+0 0 12 44 7 91
+0 1 3 55 8 12
+1 0 12 44 9 91
 ```
 
-**Prefetching is not free**, and this is the number that says so: every prediction
-is a real read, charged whether the router wants it or not. Recall keeps rising
-with budget while throughput peaks at roughly `top_k` and then falls, because past
-that point the extra bandwidth outruns what queue depth wins back. Anyone
-reporting prefetch recall without reporting the bandwidth it cost is reporting
-half the result.
+Traces from your workload beat a generic calibration corpus: routing is
+workload-specific, and so is the layout that suits it.
 
-In the same run, on-demand fetching with LRU reached 140.66 tok/s — beating every
-prefetch configuration. That is a real result on this configuration, not a bug,
-and it is why `bench --compare` sweeps rather than asserting a winner.
+## Prior art
 
-## What is measured, and what is not
-
-Being clear about this matters more than the headline number.
-
-| Claim | Status |
-|---|---|
-| Bandwidth surface in the table above | **Measured** on the development machine |
-| `verify` proves byte-identical weights | **Measured** — enforced by tests, incl. a tamper control |
-| 2.00× on the synthetic fine-grained case | **Computed** from the measured surface + a synthetic trace |
-| Speedup on your model | **Unknown until you run `analyse`** — that is what it is for |
-| End-to-end tokens/sec improvement | **Not measured.** Needs a runtime; out of scope |
-| Per-expert requantisation from measured error | **Implemented.** `build-store`; 131 tests |
-| Expert-fetch throughput (`bench`) | **Computed** from the measured surface + a replayed trace |
-| Predictor recall | **Measured** on the given trace, held out from fitting |
-| End-to-end generated tokens/sec | **Not measured.** Needs attention, KV cache and sampling |
-
-What is still missing is the transformer itself: attention, KV cache, sampling and
-a tokeniser. `bench` moves expert weights and accounts for them exactly, but it
-does not generate text, so it reports a *ceiling* on decode rate rather than a
-decode rate. On a memory-bound machine that ceiling is the binding constraint,
-which is why it was built first.
-
-The quality side is measured but not evaluated: `build-store` uses real
-per-expert round-trip error, which is a great deal better than the analytic proxy
-it replaced, but round-trip RMSE is not perplexity. A precision plan that looks
-cheap by RMSE still needs an eval before anyone trusts it in production.
-
-## Prior art, and what is different here
-
-Disk-resident MoE inference is an active area, and the runtime side is well
-covered:
+The runtime side of disk-resident MoE inference is well covered, and this is not
+another runtime:
 
 - **[Colibri](https://github.com/JustVugg/colibri)** — pure C, expert streaming,
-  router-lookahead prefetch, learned hot-expert pinning, speculative decoding.
-  The mature option; if you want a runtime, start there.
+  router-lookahead prefetch, learned pinning, speculative decoding. The mature
+  option; if you want a runtime, start there.
 - **[MoE-Infinity](https://github.com/EfficientMoE/MoE-Infinity)** —
   sparsity-aware expert cache.
 - **llama.cpp [#25294](https://github.com/ggml-org/llama.cpp/pull/25294)** —
   SSD-backed expert streaming with `O_DIRECT` and a slot cache.
-- **[Oracle-MoE](https://openreview.net/forum?id=wn6WHREK9k)**, **Sticky
-  Routing**, **ReMoE** — change *routing* to improve locality, at training time.
+- **Oracle-MoE**, **Sticky Routing**, **ReMoE** — improve locality by changing
+  *routing*, at training time.
 
-`potatomaxx` is not another runtime. It changes only the **byte layout of the
-file**, which means it composes with all of the above rather than competing, and
-risks nothing: the weights are provably unchanged. The routing-locality papers
-modify the model; this does not.
+`potatomaxx` changes the **byte layout and precision of the file**, so it composes
+with all of the above rather than competing, and risks nothing: the weights are
+provably unchanged.
 
-## Why Rust
+## Security
 
-Model files are untrusted input downloaded from public hubs, and the parser is
-the part of an inference stack with **no performance requirement at all**. The
-recent history of this format is a run of memory-safety failures in exactly that
-code path:
+Model files are untrusted input from public hubs, and the parser is the part of an
+inference stack with **no performance requirement at all**. This format's recent
+history is a run of memory-safety failures in exactly that code path:
 
-- **CVE-2026-27940** — integer overflow in llama.cpp's `gguf_init_from_file_impl()`
-  producing an undersized heap allocation, then a 528+ byte controlled overflow.
-  Itself a bypass of the fix for CVE-2025-53630.
+- **CVE-2026-27940** — integer overflow in llama.cpp's
+  `gguf_init_from_file_impl()` producing an undersized heap allocation, then a
+  528+ byte controlled overflow. A bypass of the fix for CVE-2025-53630.
 - **CVE-2026-7482** ("Bleeding Llama", CVSS 9.1) — out-of-bounds read from
   inflated tensor dimensions in Ollama's loader, leaking process memory.
 
 In safe Rust the first is a checked-arithmetic error and the second a bounds
-check. `potatomaxx` is *more* exposed than a plain loader, because it rewrites
-model files. So:
+check — but only if the code actually uses checked arithmetic and validates
+against the real file size. So there is a test suite that throws hostile input at
+the parser: 1,400 random inputs, every single-byte mutation of a valid header,
+truncation at every length, inflated counts and dimensions, unaligned and
+out-of-range offsets, invalid UTF-8. The contract is absolute — **any input at
+all yields `Ok` or `Err`, never a panic and never a read outside the file.**
 
-- Every crate is `#![forbid(unsafe_code)]` **except `pmx-probe`** (page-aligned
-  buffers for `O_DIRECT`) and **`pmx-kernels`** (SIMD intrinsics). Each unsafe
-  block carries a written invariant; the scalar kernel is authoritative and every
-  vector path is tested against it.
-- Every length and offset read from a file is validated against the real file
-  size, with checked arithmetic, before it is trusted. Malformed input yields a
-  typed error — never a panic, never a bad read.
-- **Zero dependencies.** The entire workspace is `std` only, including the GGUF
-  parser, the CLI, and the JSON reader.
+Every crate is `#![forbid(unsafe_code)]` except three, each with a stated reason
+and its invariants written down:
+
+| crate | why `unsafe` | how it is checked |
+|---|---|---|
+| `pmx-probe` | page-aligned buffers for `O_DIRECT` | alignment test |
+| `pmx-kernels` | SIMD intrinsics | scalar path is authoritative; every vector path tested against it |
+| `pmx-kio` | raw syscalls, shared io_uring mappings | batched reads compared byte-for-byte against `std` reads |
 
 ## Layout
 
-| Crate | Responsibility | `unsafe` |
+| crate | responsibility | `unsafe` |
 |---|---|---|
 | `pmx-gguf` | GGUF read, offset rewriting, permutation, verification | forbidden |
-| `pmx-probe` | Device bandwidth surface (blob size × queue depth) | audited |
-| `pmx-trace` | Trace format, co-activation statistics, synthetic traces | forbidden |
-| `pmx-partition` | Expert-order optimisation against the measured surface | forbidden |
-| `pmx-plan` | Residency and bit allocation by frequency × tier cost | forbidden |
 | `pmx-kernels` | GGUF dequantisation, native block formats, SIMD int8 dot | audited |
-| `pmx-store` | Native store: per-expert precision, contiguous experts | forbidden |
-| `pmx-cache` | Expert residency cache: LRU, LFU, GDSF | forbidden |
-| `pmx-predict` | Router lookahead, training-free | forbidden |
-| `pmx-runtime` | Replay harness tying prefetch, cache and precision together | forbidden |
-| `pmx-cli` | The `potatomaxx` binary | forbidden |
+| `pmx-kio` | io_uring, `RWF_DONTCACHE`, huge pages, residency | audited |
+| `pmx-probe` | device bandwidth surface (blob size × queue depth) | audited |
+| `pmx-trace` | trace format, co-activation statistics, synthetic traces | forbidden |
+| `pmx-partition` | expert-order optimisation against the measured surface | forbidden |
+| `pmx-plan` | residency and bit allocation by frequency × tier cost | forbidden |
+| `pmx-store` | native store: per-expert precision, contiguous experts | forbidden |
+| `pmx-cache` | expert residency cache: LRU, LFU, GDSF | forbidden |
+| `pmx-predict` | router lookahead, training-free | forbidden |
+| `pmx-runtime` | replay harness tying prefetch, cache and precision together | forbidden |
+| `pmx-cli` | the `potatomaxx` binary | forbidden |
 
-## Status
+## Testing
 
-Early. Everything above runs end to end with 131 tests, and the correctness claim
-— that a repack preserves weights exactly — is enforced by tests including a
-tamper control. But it has been exercised on synthetic checkpoints and one laptop.
+```bash
+cargo test                  # 160 tests, debug: integer overflow checks on
+cargo test --release        # 160 tests, release
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+```
 
-Bugs the test suite caught during development, as a sense of what is and is not
+No fixtures, no network, no GPU. `potatomaxx synth` builds everything the suite
+needs in seconds.
+
+Bugs the suite caught during development, as a guide to what is and is not
 settled: a factor-of-two error in half-precision subnormal decode (found by
-sweeping all 65 536 bit patterns); a store index whose writer and reader
+sweeping all 65,536 bit patterns); a store index whose writer and reader
 disagreed by four bytes per record; non-deterministic cache eviction from
 `HashMap` iteration order; 25 MiB of alignment padding around 6 MiB of weights;
-and a `NaN` sensitivity — from a single non-finite weight — that silently
-disabled precision allocation while still reporting success.
+a `NaN` sensitivity from one non-finite weight that silently disabled precision
+allocation while reporting success; and a benchmark that measured the page cache
+instead of the device because its corpus fit in RAM.
 
-If you run it against a real MoE checkpoint, the `analyse` and `bench --compare`
-output is the interesting part, especially where it says the gain is not worth it.
+## Status and how to help
 
-`docs/design.html` holds the research this came out of, including the parts that
-did not survive measurement.
+Early, and honest about it. Everything above runs, but it has been exercised on
+synthetic checkpoints and one laptop. The most valuable contributions right now:
+
+- **Run it against a real MoE checkpoint** and report the `analyse` and
+  `bench --compare` output — especially where it says the gain is not worth it.
+- **Run `potatomaxx kio` on real hardware.** Every conclusion here follows from
+  the shape of one laptop's bandwidth surface. SATA SSDs, eMMC, spinning disks,
+  Apple unified memory and bare-metal NVMe will each say something different, and
+  the io_uring-versus-threads result in particular is likely platform-specific.
+- **A quality evaluation** for the precision allocator, so RMSE can be replaced
+  by perplexity.
+- **The kernel-side BPF work** in [docs/KERNEL.md](docs/KERNEL.md): a `sched_ext`
+  scheduler, a `cache_ext`-style eviction policy. Written but untested here —
+  this machine reports `CONFIG_SCHED_CLASS_EXT is not set`.
+
+Patches want a `Signed-off-by:` line (`git commit -s`), per the kernel's
+Developer's Certificate of Origin. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licence
 
-AGPL-3.0-or-later. See [LICENSE](LICENSE).
+**GPL-2.0-or-later.** Chosen for compatibility rather than preference: the Linux
+kernel's [licensing rules](https://docs.kernel.org/process/license-rules.html)
+list `GPL-2.0+` among the compatible licences, and permit dual licensing with
+MIT, BSD and Apache-2.0. AGPL appears nowhere on that list, and is incompatible
+with combining GPL-2.0-only or Apache-2.0 code — which would rule out both
+kernel-tree inclusion and composing with llama.cpp (MIT) or Colibri
+(Apache-2.0). Every source file carries an SPDX identifier.

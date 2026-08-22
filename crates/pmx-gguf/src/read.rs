@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! GGUF header parsing.
 //!
 //! The header is read into memory in one shot (it is small even for very large

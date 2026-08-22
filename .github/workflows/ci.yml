@@ -24,7 +24,14 @@ jobs:
           components: clippy, rustfmt
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features
+      # Debug first: it enables integer overflow checks, which release does not.
+      # Model files are attacker-controlled, so an overflow is a security bug.
+      - run: cargo test --all
       - run: cargo test --all --release
+      # The parser is the CVE surface for this format; call it out separately so a
+      # failure here is unmistakable in the log.
+      - name: parser robustness against hostile input
+        run: cargo test -p pmx-gguf --test robustness -- --nocapture
 
   # The correctness claim, exercised as the CLI rather than as unit tests:
   # repack a synthetic checkpoint, prove the weights survived, then prove that
@@ -57,6 +64,13 @@ jobs:
           a=$(stat -c%s synth.gguf); b=$(stat -c%s out.gguf)
           test "$a" = "$b" || { echo "FAIL: size changed $a -> $b"; exit 1; }
           echo "OK: $a bytes in, $a bytes out"
+      - name: kernel I/O paths
+        run: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+          # A small corpus here: CI storage is virtualised and the point is that
+          # the command runs and reports, not that the numbers mean anything.
+          "$OLDPWD/./target/release/potatomaxx" kio --dir . --corpus-mib 256 --blob-kib 64 --ms 100
       - name: streaming path — predict, build a store, replay it
         run: |
           set -euo pipefail

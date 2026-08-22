@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 [package]
 name = "pmx-gguf"
 description = "Strict, zero-dependency GGUF reader and offset-rewriting writer."

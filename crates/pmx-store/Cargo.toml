@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 [package]
 name = "pmx-store"
 description = "The potatomaxx native expert store: per-expert precision, co-activation grouping, aligned direct reads."

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 [package]
 name = "pmx-partition"
 description = "Expert-order optimisation against a measured storage bandwidth surface."

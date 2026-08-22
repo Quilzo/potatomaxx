@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 [package]
 name = "pmx-plan"
 description = "Residency and bit-width allocation driven by measured access frequency and tier cost."

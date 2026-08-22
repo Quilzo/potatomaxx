@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 //! `potatomaxx` — a layout compiler for disk-resident mixture-of-experts models.
 //!
 //! Reads a GGUF MoE checkpoint and a routing trace, works out an expert order
@@ -11,6 +12,7 @@
 #![warn(missing_docs)]
 
 mod engine_cmds;
+mod kio_cmd;
 mod moe;
 /// Half-precision encoding, re-exported for the synthetic model writer.
 mod synth_half {
@@ -58,6 +60,7 @@ USAGE
 
 COMMANDS
   probe        Measure this device's read bandwidth surface (blob size x queue depth)
+  kio          Compare kernel I/O paths: pread, thread pool, io_uring, RWF_DONTCACHE
   predict      Compare router-lookahead predictors on a trace
   build-store  Requantise a checkpoint per expert into a native .pmxstore
   bench        Replay a trace against a store, measuring the fetch path
@@ -100,6 +103,8 @@ OPTIONS
            --min-speedup <f>     gain a layer must clear to be repacked (default 1.05)
   pack     --model <path> --plan <path> --out <path>
   verify   --model <path> --repacked <path> --plan <path>
+
+  kio      [--dir <path>] [--corpus-mib <n>] [--blob-kib <n>] [--ms <n>]
 
   predict  --trace <path> [--fit <0..1>] [--budgets <a,b,c>]
 
@@ -198,6 +203,7 @@ fn main() -> ExitCode {
         "plan" => cmd_plan(&args),
         "pack" => cmd_pack(&args),
         "verify" => cmd_verify(&args),
+        "kio" => cmd_kio(&args),
         "predict" => cmd_predict(&args),
         "build-store" => cmd_build_store(&args),
         "bench" => cmd_bench(&args),
@@ -270,6 +276,15 @@ fn parse_list(s: &str) -> Result<Vec<usize>, String> {
                 .map_err(|_| format!("{x:?} is not a number"))
         })
         .collect()
+}
+
+fn cmd_kio(args: &Args) -> Result<(), String> {
+    kio_cmd::run(
+        args.get("dir").unwrap_or("."),
+        args.num("corpus-mib", 1024)?,
+        args.num("blob-kib", 64)?,
+        args.num("ms", 400)?,
+    )
 }
 
 fn cmd_predict(args: &Args) -> Result<(), String> {

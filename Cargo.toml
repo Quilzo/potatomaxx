@@ -1,9 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 [workspace]
 resolver = "2"
 members = [
     "crates/pmx-cache",
     "crates/pmx-gguf",
     "crates/pmx-kernels",
+    "crates/pmx-kio",
     "crates/pmx-probe",
     "crates/pmx-runtime",
     "crates/pmx-store",
@@ -18,7 +20,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
-license = "AGPL-3.0-or-later"
+license = "GPL-2.0-or-later"
 repository = "https://github.com/Quilzo/potatomaxx"
 authors = ["Quilzo"]
 
