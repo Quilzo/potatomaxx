@@ -101,9 +101,10 @@ to #25294:
   not to evict everyone else's working set to hold 40 GB you'll read once.
 
 Caveat on all of it: measured under WSL2, so the block path is virtualised, and a
-thread pool actually beat my io_uring at QD16 (3.29 vs 1.54 GB/s). I'd trust the
-*directions* more than the absolute numbers, and I'd welcome results from bare
-metal.
+thread pool actually beat my io_uring at QD16 (3.29 vs 1.54 GB/s). I don't have
+bare-metal access to check whether that's a virtualisation artefact, so please
+treat the *directions* as more trustworthy than the absolute numbers. `potatomaxx
+kio` reproduces the table in about a minute if anyone wants to correct me.
 
 ## Try it without downloading anything
 

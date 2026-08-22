@@ -63,8 +63,9 @@ you'll read once" knob. `cachestat()` confirms the plain path thrashes.
 **My io_uring lost to 16 threads.** 1.54 vs 3.29 GB/s. And my *first* io_uring
 version was much worse still — I submitted a batch and waited for all of it, which
 drains the ring between batches; switching to a sliding window gained 148% at
-QD8. Caveat: this is WSL2, so virtualised block path. Would genuinely like numbers
-from bare metal.
+QD8. Caveat: this is WSL2, so virtualised block path, and I don't have a bare-metal
+box to check on. `potatomaxx kio` reproduces the whole table in about a minute if
+someone wants to tell me I'm wrong.
 
 ## What the tool does
 

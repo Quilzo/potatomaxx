@@ -65,9 +65,11 @@ reproducible and GPL-2.0-or-later.
 
   https://github.com/Quilzo/potatomaxx  (`potatomaxx kio` reproduces the table)
 
-Caveat: measured under WSL2, so the block path is virtualised. The
-residency and thrashing figures come from cachestat() and should be sound
-regardless, but I would not lean on the absolute bandwidths.
+Caveat: measured under WSL2, so the block path is virtualised, and I do
+not have bare-metal access to check. The residency and thrashing figures
+come from cachestat() and should hold regardless -- they are counts of
+pages, not timings -- but I would not lean on the absolute bandwidths,
+and the 49% figure in particular may look different on a native device.
 
 Thanks,
 Rashik Adhikari <rashik.cybersec@gmail.com>

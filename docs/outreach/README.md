@@ -19,10 +19,16 @@ honest answer is nobody. These are how that changes.
 
 ## Before sending any of it
 
-- **Re-run `potatomaxx kio` on bare metal.** Every I/O number was measured under
-  WSL2, where the block path is virtualised. The drafts say so prominently, but
-  bare-metal numbers would be worth more than the caveat. This is the single
-  highest-value hour available.
+- **Bare metal is not available to the author.** Every I/O number was measured
+  under WSL2, where the block path is virtualised. Rather than hide that, each
+  draft states it plainly and asks the reader to reproduce or refute — which is a
+  better use of a mailing list than a claim would be. `potatomaxx kio` prints the
+  table in about a minute with no model, GPU or configuration, which makes the ask
+  cheap to honour.
+
+- **Do not send the mailing-list posts from a work address.** vger and kvack
+  archives are public and permanent (lore.kernel.org), so the `From:` header is
+  effectively published for good. Send from a personal address.
 - **Kernel lists want plain text**, no HTML, no top-posting, wrapped at ~75
   columns. Both `.txt` drafts are already wrapped and formatted for that; send
   them with `git send-email` or a client set to plain text, and do not let a

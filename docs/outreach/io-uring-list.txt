@@ -54,12 +54,19 @@ No registered buffers, no SQPOLL, no IOPOLL, IORING_OP_READ with plain
 user buffers. Would you expect registered buffers or SQPOLL to close a 2x
 gap, or is that gap telling me something else?
 
-Caveat I should flag prominently: this is WSL2, so the block path is
-virtualised. That may be the whole answer -- if the host-side virtio queue
-is the bottleneck then more submitting threads would help and fewer
-syscalls would not. If anyone has the equivalent numbers on bare metal
-NVMe I'd be glad to be corrected, and I'll re-run on bare metal before
-treating any of this as settled.
+Caveat I should flag prominently, and it is a real limitation rather than
+a formality: this is WSL2, so the block path is virtualised. That may be
+the whole answer to (2) -- if the host-side virtio queue is the
+bottleneck then more submitting threads would help and fewer syscalls
+would not.
+
+I do not have bare-metal access, so I cannot rule that out myself, and I
+would rather say so than imply the numbers are more general than they
+are. If anyone can reproduce or refute (2) on a native NVMe device I
+would be genuinely grateful -- `potatomaxx kio` prints the table above in
+about a minute and needs no model, no GPU and no configuration. If it
+turns out to be purely a virtualisation artefact, that is a useful result
+and I will say so in the repository.
 
 Third result, included because it surprised me and may be useful to
 others: RWF_DONTCACHE measured 49% slower than plain buffered reads at
