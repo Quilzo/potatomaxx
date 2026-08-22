@@ -1,10 +1,8 @@
 To: gnueval@gnu.org
 Subject: potatomaxx 0.1.0 -- offering software to GNU
 
-Send as PLAIN TEXT (no HTML, no attachments except the tarball if needed).
-Produce the tarball with `make dist`.
-
-Before sending, resolve the one bracketed item below.
+Send as PLAIN TEXT (no HTML). The tarball is linked, not attached.
+Nothing is left to fill in.
 
 ----------------------------------------------------------------------
 
