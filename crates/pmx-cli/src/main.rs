@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod compare_cmd;
 mod engine_cmds;
 mod kio_cmd;
 mod moe;
@@ -66,6 +67,7 @@ COMMANDS
   bench        Replay a trace against a store, measuring the fetch path
   synth        Write a small synthetic MoE checkpoint and trace, for trying the pipeline
   inspect      Report the MoE structure of a GGUF checkpoint
+  compare      Check two quantisations of the same model dequantise to the same weights
   analyse      Score the existing expert order against an optimised one, per layer
   plan         Write a repack plan
   pack         Apply a plan, emitting a new GGUF
@@ -95,6 +97,11 @@ OPTIONS
                                  (unrealistic: makes the existing order optimal)
 
   inspect  <model.gguf>
+
+  compare  --a <reference.gguf> --b <candidate.gguf> [--tensor <substr>] [--limit <n>]
+           Dequantises tensors common to both and reports agreement. Use a
+           higher-precision file as --a: an F16 reference validates a quantised
+           decoder against ground truth rather than against itself.
 
   analyse  --model <path> --trace <path> [--probe <path>] [--merge-gap <n>]
            [--queue-depth <n>]   reads the consuming runtime keeps in flight (default 8)
@@ -204,6 +211,7 @@ fn main() -> ExitCode {
         "pack" => cmd_pack(&args),
         "verify" => cmd_verify(&args),
         "kio" => cmd_kio(&args),
+        "compare" => cmd_compare(&args),
         "predict" => cmd_predict(&args),
         "build-store" => cmd_build_store(&args),
         "bench" => cmd_bench(&args),
@@ -276,6 +284,15 @@ fn parse_list(s: &str) -> Result<Vec<usize>, String> {
                 .map_err(|_| format!("{x:?} is not a number"))
         })
         .collect()
+}
+
+fn cmd_compare(args: &Args) -> Result<(), String> {
+    compare_cmd::run(
+        args.req("a")?,
+        args.req("b")?,
+        args.get("tensor"),
+        args.num("limit", 12)?,
+    )
 }
 
 fn cmd_kio(args: &Args) -> Result<(), String> {
