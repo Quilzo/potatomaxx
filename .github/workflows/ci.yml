@@ -33,6 +33,31 @@ jobs:
       - name: parser robustness against hostile input
         run: cargo test -p pmx-gguf --test robustness -- --nocapture
 
+  # Everything a distribution packager or a foundation reviewer would check:
+  # GNU build conventions, a staging install, a clean uninstall, and that the
+  # Texinfo manual actually builds.
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y texinfo groff
+      - name: texinfo manual builds
+        run: make info
+      - name: man page renders without warnings
+        run: groff -man -Tascii -ww doc/potatomaxx.1 > /dev/null
+      - name: staging install honours DESTDIR, uninstall is clean
+        run: |
+          set -euo pipefail
+          make install DESTDIR=/tmp/stage prefix=/usr
+          test -x /tmp/stage/usr/bin/potatomaxx
+          test -f /tmp/stage/usr/share/man/man1/potatomaxx.1
+          make uninstall DESTDIR=/tmp/stage prefix=/usr
+          remaining=$(find /tmp/stage -type f | wc -l)
+          test "$remaining" = "0" || { echo "uninstall left $remaining files"; exit 1; }
+      - name: release tarball
+        run: make dist && tar tzf potatomaxx-0.1.0.tar.gz | head -5
+
   # The correctness claim, exercised as the CLI rather than as unit tests:
   # repack a synthetic checkpoint, prove the weights survived, then prove that
   # verification actually rejects a corrupted file.

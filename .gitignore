@@ -5,3 +5,6 @@
 *.pmxtrace
 pmx-probe.json
 corpus.bin
+potatomaxx-*.tar.gz
+/doc/potatomaxx.info
+/doc/potatomaxx.html

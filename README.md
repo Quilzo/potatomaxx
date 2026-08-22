@@ -37,6 +37,18 @@ best: threads at QD16 — 3.291 GB/s, 33.1x the depth-1 baseline
 
 ---
 
+## Install
+
+```bash
+make                       # cargo build --release
+sudo make install          # honours prefix and DESTDIR
+make check                 # tests, debug and release
+```
+
+GNU Makefile conventions are followed (`prefix`, `DESTDIR`, `install`,
+`uninstall`, `check`, `dist`, `info`), so distribution packaging should be
+uneventful. `man potatomaxx` and `info potatomaxx` are both provided.
+
 ## Quick start, no model download required
 
 ```bash
@@ -329,7 +341,14 @@ synthetic checkpoints and one laptop. The most valuable contributions right now:
   this machine reports `CONFIG_SCHED_CLASS_EXT is not set`.
 
 Patches want a `Signed-off-by:` line (`git commit -s`), per the kernel's
-Developer's Certificate of Origin. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Developer's Certificate of Origin. See [CONTRIBUTING.md](CONTRIBUTING.md),
+[GOVERNANCE.md](GOVERNANCE.md) and [SECURITY.md](SECURITY.md).
+
+On foundations: [docs/SUBMISSION.md](docs/SUBMISSION.md) records which ones can
+actually accept a project like this and why most cannot yet — the ASF requires
+Apache-2.0, the SFC requires a project over a year old with an established
+community, and LF AI & Data requires paid membership. GNU is the one that
+evaluates work in progress, and the materials are prepared there.
 
 ## Licence
 

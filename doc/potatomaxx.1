@@ -1,0 +1,134 @@
+.\" SPDX-License-Identifier: GPL-2.0-or-later
+.TH POTATOMAXX 1 "2026-08-22" "potatomaxx 0.1.0" "User Commands"
+.SH NAME
+potatomaxx \- make mixture-of-experts models cheaper to read
+.SH SYNOPSIS
+.B potatomaxx
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+A large mixture-of-experts (MoE) checkpoint does not fit in RAM, so it is read
+from storage while it runs. That makes decoding a storage problem.
+.B potatomaxx
+reduces the cost of those reads three ways, and measures each rather than
+assuming it: by reordering experts on disk so co-firing experts are adjacent, by
+storing each expert at its own bit width, and by predicting which experts a layer
+will select before its router has run.
+.PP
+The layout pass emits a
+.B drop-in GGUF
+\(em same tensor names, same shapes, byte-identical weights \(em so any engine
+reads it unchanged. Permuting the expert axis is a relabelling: permute the
+router's rows identically and the computed function is unchanged bit for bit.
+.SH COMMANDS
+.TP
+.B probe
+Measure this device's read bandwidth surface (request size against queue depth)
+using O_DIRECT, and write it as JSON for the other commands to cost against.
+.TP
+.B kio
+Compare kernel I/O paths on this machine: synchronous
+.BR pread (2),
+a thread pool, and io_uring in both batch and sliding-window form, with and
+without
+.BR RWF_DONTCACHE .
+Reports page-cache residency alongside bandwidth and recommends an engine from
+the measurement.
+.TP
+.B synth
+Write a small synthetic MoE checkpoint and routing trace, so the whole pipeline
+can be exercised without downloading a model.
+.TP
+.B inspect \fIMODEL\fR
+Report the MoE structure of a GGUF checkpoint: experts per layer, slice size,
+precision, and which tensors carry the expert axis.
+.TP
+.B analyse
+Score the checkpoint's existing expert order against an optimised one, per layer,
+costed against a measured bandwidth surface. Says plainly when the gain is not
+worth rewriting a file for.
+.TP
+.B plan
+Write a reviewable text plan describing exactly which tensors move and how.
+.TP
+.B pack
+Apply a plan, emitting a new GGUF.
+.TP
+.B verify
+Prove a repacked file holds exactly the original weights, by comparing both files
+in full. Strict enough to reject a single flipped byte.
+.TP
+.B predict
+Compare router-lookahead predictors on a trace, fitting on a prefix and scoring on
+held-out tokens.
+.TP
+.B build-store
+Requantise a checkpoint per expert into a native
+.IR .pmxstore ,
+allocating bits from measured per-expert error and access frequency. Routers are
+never requantised.
+.TP
+.B bench
+Replay a trace against a store, measuring the expert-fetch path: cache hit rate,
+bytes and requests per token, and fetch-limited throughput.
+.SH OPTIONS
+Options are per-command; run
+.B potatomaxx help
+for the full list. Commonly useful:
+.TP
+.BR \-\-probe " \fIFILE\fR"
+Cost against a bandwidth surface written by
+.BR "potatomaxx probe" .
+Without it, only request counts are reported, never times.
+.TP
+.BR \-\-min\-speedup " \fIF\fR"
+Gain a layer must clear to be judged worth repacking. Default 1.05.
+.TP
+.BR \-\-error\-bits " \fIF\fR"
+Quality ceiling for precision allocation, expressed as the bit width whose
+uniform error must not be exceeded. Lower is more aggressive.
+.SH EXIT STATUS
+Zero on success, non-zero on error. A refusal to write a plan because no layer
+clears the threshold is a
+.B success:
+"no useful gain here" is an answer, not a failure.
+.SH FILES
+.TP
+.I *.pmxtrace
+Routing trace. A text form is accepted: one line per token and layer,
+.RI \(dq token " " layer " " experts... \(dq.
+.TP
+.I *.pmxplan
+Repack plan. Plain text, so it can be reviewed before a multi-gigabyte file is
+rewritten.
+.TP
+.I *.pmxstore
+Native expert store with per-expert precision, which GGUF cannot express because
+a tensor carries one type and a layer's experts share a tensor.
+.SH NOTES
+.B bench
+reports a ceiling on decode rate, not a decode rate: it moves expert weights but
+does not run attention or sampling. On a memory-bound machine that ceiling is the
+binding constraint.
+.PP
+The kernel I/O paths need Linux. On other targets every syscall wrapper fails
+closed with ENOSYS and no syscall is issued.
+.SH SECURITY
+Model files are untrusted input. Every length and offset read from a file is
+validated with checked arithmetic against the real file size. See
+.I SECURITY.md
+in the distribution.
+.SH SEE ALSO
+.BR fio (1),
+.BR io_uring (7),
+.BR madvise (2),
+.BR cachestat (2)
+.PP
+Full manual:
+.B info potatomaxx
+.SH BUGS
+Report at https://github.com/Quilzo/potatomaxx/issues
+.SH COPYRIGHT
+Copyright \(co 2026 Quilzo. Licence GPL-2.0-or-later. This is free software: you
+are free to change and redistribute it. There is NO WARRANTY, to the extent
+permitted by law.

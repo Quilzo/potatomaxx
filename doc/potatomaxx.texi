@@ -1,0 +1,383 @@
+\input texinfo   @c -*-texinfo-*-
+@c SPDX-License-Identifier: GPL-2.0-or-later
+@c %**start of header
+@setfilename potatomaxx.info
+@include version.texi
+@settitle potatomaxx @value{VERSION}
+@documentencoding UTF-8
+@syncodeindex pg cp
+@c %**end of header
+
+@copying
+This manual is for potatomaxx (version @value{VERSION}).
+
+Copyright @copyright{} 2026 Quilzo.
+
+@quotation
+Permission is granted to copy, distribute and/or modify this document under the
+terms of the GNU General Public License, version 2 or any later version
+published by the Free Software Foundation.
+@end quotation
+@end copying
+
+@dircategory Development
+@direntry
+* potatomaxx: (potatomaxx).      Make mixture-of-experts models cheaper to read.
+@end direntry
+
+@titlepage
+@title potatomaxx
+@subtitle Make mixture-of-experts models cheaper to read
+@subtitle Version @value{VERSION}
+@author Quilzo
+@page
+@vskip 0pt plus 1filll
+@insertcopying
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top potatomaxx
+@insertcopying
+@end ifnottex
+
+@menu
+* Overview::            What the problem is and why storage decides it.
+* Invoking potatomaxx:: The command line.
+* Layout::              Reordering experts, and why it is safe.
+* Precision::           Per-expert bit widths from measured error.
+* Lookahead::           Predicting a router before it runs.
+* Kernel I/O::          io_uring, RWF_DONTCACHE, huge pages, residency.
+* Measured or not::     What is measured, computed, and unknown.
+* Findings::            Measurements that contradicted the design.
+* Security::            The threat model, which is narrow and specific.
+* Index::
+@end menu
+
+@node Overview
+@chapter Overview
+
+A large mixture-of-experts (@dfn{MoE}) checkpoint does not fit in RAM, so it is
+read from storage while it runs. That makes decoding a storage problem, and
+storage cares enormously about @emph{how} you ask.
+
+On the machine this was developed on --- an i5-1235U laptop with 7.6@tie{}GB of
+RAM and no GPU --- the same NVMe device delivers 0.099@tie{}GB/s at queue depth
+one and 3.291@tie{}GB/s at depth sixteen. A factor of thirty-three, from nothing
+but concurrency.
+
+@command{potatomaxx} attacks the cost of those reads three ways, and
+@emph{measures} each rather than asserting it:
+
+@enumerate
+@item
+@b{Layout}: reorder experts on disk so the ones that fire together are adjacent,
+turning scattered slice reads into contiguous runs. @xref{Layout}.
+@item
+@b{Precision}: store each expert at its own bit width, chosen from measured
+quantisation error and how often the expert is actually used. @xref{Precision}.
+@item
+@b{Lookahead}: predict which experts a layer will select before its router has
+run, because you cannot queue reads you have not predicted. @xref{Lookahead}.
+@end enumerate
+
+It is not an inference engine and does not try to be. It has no attention, no KV
+cache and no sampler. It makes a model cheaper to read; something else runs it.
+
+@cindex dependencies
+The program has no dependencies beyond the Rust standard library. The GGUF
+parser, the command line, the io_uring implementation and the JSON reader are all
+written here, deliberately: every dependency widens the surface exposed to an
+untrusted model file.
+
+@node Invoking potatomaxx
+@chapter Invoking potatomaxx
+
+@example
+potatomaxx @var{command} [@var{options}]
+@end example
+
+Run @samp{potatomaxx help} for the full option list. The commands divide into
+measurement, the layout pipeline, and the streaming path.
+
+@section Measurement
+
+@table @command
+@item probe
+Measure this device's read bandwidth surface --- request size against queue
+depth --- using @code{O_DIRECT} so the figures describe the device and not the
+page cache. Writes JSON the other commands cost against.
+
+@item kio
+Compare kernel I/O paths: synchronous @code{pread}, a thread pool, and io_uring
+in both batch and sliding-window form, with and without @code{RWF_DONTCACHE}.
+Reports page-cache residency alongside bandwidth, and recommends an engine from
+the measurement rather than from a preference. @xref{Kernel I/O}.
+
+@item synth
+Write a small synthetic MoE checkpoint and routing trace, so the whole pipeline
+runs in seconds without downloading a model.
+
+@item inspect @var{model}
+Report a checkpoint's MoE structure: experts per layer, slice size, precision,
+and which tensors carry the expert axis.
+@end table
+
+@section The layout pipeline
+
+@table @command
+@item analyse
+Score the existing expert order against an optimised one, per layer, costed
+against a measured surface. Reports plainly when the gain is not worth rewriting
+a file for.
+
+@item plan
+Write a plan. It is plain text on purpose: it authorises rewriting a
+multi-gigabyte file, so a reviewer should be able to read exactly what will
+happen first.
+
+@item pack
+Apply a plan, emitting a new GGUF.
+
+@item verify
+Prove the result holds exactly the original weights. @xref{Layout}.
+@end table
+
+@section The streaming path
+
+@table @command
+@item predict
+Compare router-lookahead predictors on a trace, fitted on a prefix and scored on
+held-out tokens.
+
+@item build-store
+Requantise per expert into a native @file{.pmxstore}. @xref{Precision}.
+
+@item bench
+Replay a trace against a store, measuring the expert-fetch path.
+@end table
+
+@node Layout
+@chapter Layout
+
+@cindex relabelling
+@cindex permutation, expert
+Permuting the expert axis is a @dfn{relabelling}. If new slot @var{j} holds old
+expert @code{perm[@var{j}]}, and the router's weight rows are permuted by the
+same @code{perm}, then the logit computed for slot @var{j} is exactly the logit
+the original model computed for expert @code{perm[@var{j}]}. Top-@var{k} selects
+the same real experts, from the same bytes. The function computed is unchanged,
+bit for bit.
+
+The GGUF specification permits the file-level half of this: tensor data is
+located only through the @code{offset} in its @code{tensor_info}, physical order
+is unconstrained, and inter-tensor padding is explicitly allowed. A repacked file
+is therefore a drop-in GGUF.
+
+@cindex verify
+@command{potatomaxx verify} proves it afterwards, reading both files in full and
+comparing every expert slice. It is strict: flipping four bytes anywhere fails
+it, and continuous integration asserts that it does.
+
+Layout is the @emph{secondary} lever, and saying so matters. @xref{Findings}.
+
+@node Precision
+@chapter Precision
+
+@cindex mixed precision, per expert
+Per-expert precision cannot be expressed in GGUF at all: a tensor carries one
+@code{ggml_type}, and a MoE layer's experts share a tensor. Giving expert seven
+three bits and expert eight five bits therefore needs a container defined here,
+which is what @file{.pmxstore} is.
+
+Bits follow @b{access frequency and tier cost}, not structural role. An expert's
+contribution to decode time is proportional to how often it is read and to which
+tier serves it; its contribution to quality loss is proportional to how often it
+is read and how badly it quantises. Minimising expected loss under a movement
+budget therefore says something the usual formulation does not: spend fewer bits
+where bytes are most expensive and least often needed.
+
+@cindex error, measured
+The error term is @emph{measured} --- the round-trip error of actually
+quantising that expert's weights at each candidate precision --- not an analytic
+proxy. An earlier version used @code{4^-bits}, which against an F16 baseline
+reported such enormous loss for any quantisation that the allocator silently
+refused every change while reporting success.
+
+@cindex router, not requantised
+@cindex expert shift
+@b{Routers are never requantised.} Quantisation error in a router perturbs expert
+@emph{selection} --- the ``expert shift'' problem --- which would invalidate the
+very trace the plan was derived from and silently change which experts the model
+uses. There is no option to do otherwise.
+
+@node Lookahead
+@chapter Lookahead
+
+A device's bandwidth depends far more on how many reads are in flight than on
+anything a file layout controls. But you cannot have eight reads outstanding for
+experts you have not been told about, and the router for layer @var{n} runs only
+after layer @var{n-1} finishes. Prediction buys that time, and is therefore the
+mechanism by which the largest available speedup is claimed.
+
+A wrong prediction is worse than none: it spends bandwidth @emph{and} still
+stalls. So @command{predict} reports precision as well as recall, and
+@command{bench} charges every prefetch as the real read it is.
+
+The predictors here are training-free, using only routing history a running
+engine already has. Trained pre-attention routers do considerably better, and the
+documentation says so rather than implying parity.
+
+@node Kernel I/O
+@chapter Kernel I/O
+
+@cindex io_uring
+@cindex RWF_DONTCACHE
+@cindex cachestat
+Five kernel interfaces matter to this workload. Each is probed at runtime rather
+than inferred from a version string, because distributions backport, containers
+lie, and @code{RWF_DONTCACHE} additionally requires the filesystem to have opted
+in.
+
+@table @code
+@item io_uring
+Queue depth with one syscall per batch instead of one per read. How it is driven
+matters more than using it: see @ref{Findings}.
+
+@item RWF_DONTCACHE
+Read through the page cache but drop the range on completion. Streaming a
+forty-gigabyte store otherwise fills the page cache with data that will not be
+reused, evicts every other process's working set, and makes reclaim the
+bottleneck.
+
+@item MADV_HUGEPAGE
+The resident hot set is read on nearly every token, so its page-table walks are
+on the critical path.
+
+@item MADV_RANDOM
+Readahead bets the next block is wanted. For expert fetch that is a losing bet: a
+router decides, not address order.
+
+@item cachestat
+Ask how much of a range is actually resident, rather than believing a cache plan
+is being honoured.
+@end table
+
+@cindex kernel, why not in the
+An inference engine cannot go in the kernel, and should not. Floating point is
+prohibited there; the @code{kernel_fpu_begin} escape hatch disables preemption,
+so a matrix multiply inside it would create unbounded non-preemptible sections.
+And a model is policy, where the kernel's rule is mechanism only. The sanctioned
+route for application-specific policy in a hot path is BPF. The distribution's
+@file{docs/KERNEL.md} sets this out at length.
+
+@node Measured or not
+@chapter What is measured, and what is not
+
+This distinction is the point of the program, so it is stated before any
+feature.
+
+@table @asis
+@item Measured
+The bandwidth surface, the engine comparison, queue-depth scaling, predictor
+recall on held-out tokens, cache policy against the offline optimum, and
+per-expert quantisation error. Also that @command{verify} proves byte-identical
+weights, which is enforced by tests including a tamper control.
+
+@item Computed
+Weight-movement speedup and expert-fetch throughput. These are arithmetic over
+measured constants and named assumptions, not results, and are labelled as such
+where they are reported.
+
+@item Unknown
+The speedup on @emph{your} model. That is what @command{analyse} is for.
+
+@item Not measured
+End-to-end generated tokens per second. There is no attention, KV cache or
+sampler here, so @command{bench} reports a ceiling on decode rate rather than a
+decode rate. Quality is measured as round-trip error, which is not perplexity: a
+plan that looks cheap by that measure still needs a real evaluation.
+@end table
+
+@node Findings
+@chapter Findings that contradicted the design
+
+Kept because they are the most useful output, and each is now a regression test.
+
+@table @asis
+@item Layout is the secondary lever
+The original design argued for co-activation layout as the primary win.
+Measurement disagreed: once a layer's top-@var{k} reads are issued concurrently,
+reordering buys 1.1 to 1.6 times, and only for slices in a particular size band.
+Queue depth is worth six to thirty-three times, and no layout can influence it.
+
+@item Fixed groups read whole are a net loss
+Over-reading a two-megabyte group costs more than coalescing saves above roughly
+256@tie{}KiB slices.
+
+@item Cost-awareness has a precise limit
+A frequency-and-cost-aware cache reaches 90.7% of the offline optimum against
+LRU's 80.9% on skewed routing. But its key contains @code{cost / size}, so at a
+fixed bandwidth that term is constant and it degenerates to plain LFU --- which
+is @emph{worse} than LRU. Cost-awareness pays across storage tiers, not within
+one.
+
+@item Prefetching is not free
+Every prediction is a real read. Throughput peaks near top-@var{k} and then falls
+while recall keeps climbing. In one configuration plain on-demand LRU beat every
+prefetch setting.
+
+@item A budget relative to the baseline is degenerate
+Once sensitivity is measured the baseline @emph{is} the reference and its error is
+zero, so any multiple of it permits nothing while still reporting success.
+
+@item How io_uring is driven matters more than using it
+Submitting a batch and waiting for all of it drains the ring between batches, so
+the device idles in the gap; that form peaked at queue depth eight and then
+declined. A sliding window gained 148% at the same depth. And it still lost to a
+thread pool on this machine, because one ring submitted and reaped from a single
+thread is not enough where the block path is virtualised.
+
+@item RWF_DONTCACHE is slower, and worth it
+It measured 49% slower and is not a throughput optimisation. It declines to
+retain pages nothing will read again, so the cost of a streaming read falls on
+this process rather than on everything else on the machine.
+@end table
+
+@node Security
+@chapter Security
+
+@cindex threat model
+The threat model is narrow, which makes it easy to state. @command{potatomaxx}
+parses attacker-controlled files: a checkpoint is downloaded from a public hub by
+someone who did not write it, and its header is read with offset arithmetic.
+
+That is the code path which, in other implementations of this format, produced
+CVE-2026-27940 (an integer overflow to an undersized heap allocation, then a
+controlled overflow, itself a bypass of an earlier fix) and CVE-2026-7482, a
+heap out-of-bounds read from inflated tensor dimensions that leaked process
+memory.
+
+The contract here is absolute: @b{for any input at all, parsing returns success
+or an error --- never a panic, never a hang, never a read outside the file.} A
+dedicated suite enforces it with random inputs, every single-byte mutation of a
+valid header, truncation at every length, inflated counts and dimensions,
+unaligned and out-of-range offsets, and invalid UTF-8.
+
+Every component forbids @code{unsafe} code except three, each for a stated reason
+that safe Rust cannot express: SIMD intrinsics, page-aligned buffers for
+@code{O_DIRECT}, and raw syscalls with shared io_uring mappings. In each, the
+portable implementation is authoritative and the optimised path is tested against
+it.
+
+@xref{Top}, and the distribution's @file{SECURITY.md}, for how to report a
+problem.
+
+@node Index
+@unnumbered Index
+
+@printindex cp
+
+@bye
