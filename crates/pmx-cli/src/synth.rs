@@ -42,15 +42,33 @@ fn put_str(b: &mut Vec<u8>, s: &str) {
     b.extend_from_slice(s.as_bytes());
 }
 
-/// Deterministic byte pattern for one expert slice.
+/// Deterministic weight pattern for one expert slice.
+///
+/// Emits valid finite F16 values, not random bit patterns. Random 16-bit
+/// patterns are about 3% NaN or infinity, and a single non-finite weight is
+/// enough to poison a quantisation-error measurement into `NaN` — which in turn
+/// silently disables precision allocation, because every comparison against
+/// `NaN` is false. The synthetic model has to look like a real checkpoint in
+/// that respect or it tests the wrong thing.
+///
+/// Values are drawn from roughly N(0, 0.05), the scale weights of a trained
+/// network actually sit at, with a per-expert offset so a scrambled permutation
+/// is detectable.
 fn pattern(layer: u32, tensor: u32, expert: u32, len: usize, out: &mut Vec<u8>) {
     out.clear();
     let mut x = ((layer as u64) << 40) ^ ((tensor as u64) << 24) ^ (expert as u64 * 0x9E3779B9) | 1;
-    while out.len() < len {
+    let mut next = move || {
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17;
-        out.extend_from_slice(&x.to_le_bytes());
+        x
+    };
+    let bias = (expert % 16) as f32 * 0.002;
+    while out.len() < len {
+        // Sum of three uniforms: cheap, deterministic, roughly bell-shaped.
+        let u = |v: u64| (v >> 11) as f32 / (1u64 << 53) as f32 - 0.5;
+        let v = (u(next()) + u(next()) + u(next())) * 0.06 + bias;
+        out.extend_from_slice(&crate::synth_half::f32_to_f16(v).to_le_bytes());
     }
     out.truncate(len);
 }

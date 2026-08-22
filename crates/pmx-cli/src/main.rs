@@ -10,7 +10,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod engine_cmds;
 mod moe;
+/// Half-precision encoding, re-exported for the synthetic model writer.
+mod synth_half {
+    pub use pmx_kernels::half::f32_to_f16;
+}
 mod planfile;
 mod synth;
 
@@ -53,6 +58,9 @@ USAGE
 
 COMMANDS
   probe        Measure this device's read bandwidth surface (blob size x queue depth)
+  predict      Compare router-lookahead predictors on a trace
+  build-store  Requantise a checkpoint per expert into a native .pmxstore
+  bench        Replay a trace against a store, measuring the fetch path
   synth        Write a small synthetic MoE checkpoint and trace, for trying the pipeline
   inspect      Report the MoE structure of a GGUF checkpoint
   analyse      Score the existing expert order against an optimised one, per layer
@@ -71,7 +79,15 @@ OPTIONS
            --layers <n>          MoE layers (default 2)
            --tokens <n>          tokens to simulate (default 4000)
            --clusters <n>        planted co-activation clusters (default 4)
-           --locality <0..1>     share of tokens routed within one cluster (default 0.85)
+           --locality <0..1>     share of tokens drawn from one cluster (default 0.85)
+                                 — this is *within-token* co-activation
+           --persistence <0..1>  chance a token reuses the previous token's cluster
+                                 (default 0.7) — *across-token* structure, which is
+                                 what lookahead prediction needs
+           --layer-coupling <0..1>
+                                 chance a layer reuses the previous layer's cluster
+                                 (default 0.45) — what makes layer n predictable
+                                 from layer n-1, and so prefetchable
            --no-scatter          keep planted clusters on contiguous expert ids
                                  (unrealistic: makes the existing order optimal)
 
@@ -84,6 +100,20 @@ OPTIONS
            --min-speedup <f>     gain a layer must clear to be repacked (default 1.05)
   pack     --model <path> --plan <path> --out <path>
   verify   --model <path> --repacked <path> --plan <path>
+
+  predict  --trace <path> [--fit <0..1>] [--budgets <a,b,c>]
+
+  build-store --model <path> --trace <path> --out <path> [--probe <path>]
+           [--ram-mib <n>]       RAM budget for resident experts (default 512)
+           [--group-align <n>]   group alignment in bytes (default 2097152)
+           [--group-experts <n>] experts per aligned group (default 8)
+           [--error-bits <f>]    quality ceiling, expressed as the bit width whose
+                                 uniform error must not be exceeded (default 4.5).
+                                 Lower means more aggressive.
+
+  bench    --store <path> --trace <path> [--probe <path>]
+           [--cache-mib <n>] [--policy lru|lfu|gdsf] [--predictor <name>]
+           [--budget <n>] [--queue-depth <n>] [--fit <0..1>] [--compare]
 
 NOTE
   Layout is the secondary lever. On the development machine, coalescing reads is
@@ -168,6 +198,9 @@ fn main() -> ExitCode {
         "plan" => cmd_plan(&args),
         "pack" => cmd_pack(&args),
         "verify" => cmd_verify(&args),
+        "predict" => cmd_predict(&args),
+        "build-store" => cmd_build_store(&args),
+        "bench" => cmd_bench(&args),
         "help" | "-h" | "--help" => {
             out!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -226,6 +259,86 @@ fn load_surface(args: &Args) -> Surface {
             Surface::default()
         }
     }
+}
+
+fn parse_list(s: &str) -> Result<Vec<usize>, String> {
+    s.split(',')
+        .map(|x| x.trim())
+        .filter(|x| !x.is_empty())
+        .map(|x| {
+            x.parse::<usize>()
+                .map_err(|_| format!("{x:?} is not a number"))
+        })
+        .collect()
+}
+
+fn cmd_predict(args: &Args) -> Result<(), String> {
+    let trace = args.req("trace")?;
+    let fit: f64 = args.num("fit", 0.5)?;
+    let budgets = match args.get("budgets") {
+        Some(v) => parse_list(v)?,
+        None => {
+            let t = Trace::read(trace).map_err(|e| format!("reading {trace}: {e}"))?;
+            let k = t.top_k as usize;
+            vec![k, k * 2, k * 4]
+        }
+    };
+    engine_cmds::predict(trace, fit, &budgets)
+}
+
+fn cmd_build_store(args: &Args) -> Result<(), String> {
+    let model = args.req("model")?;
+    let trace = args.req("trace")?;
+    let out = args.req("out")?;
+    let ram_mib: u64 = args.num("ram-mib", 512)?;
+    let group_align: u64 = args.num("group-align", 2 << 20)?;
+    let group_experts: u32 = args.num("group-experts", 8)?;
+    let error_bits: f64 = args.num("error-bits", 4.5)?;
+    let surface = load_surface(args);
+    engine_cmds::build_store(
+        model,
+        trace,
+        out,
+        ram_mib,
+        group_align,
+        group_experts,
+        error_bits,
+        &surface,
+    )
+}
+
+fn cmd_bench(args: &Args) -> Result<(), String> {
+    let store = args.req("store")?;
+    let trace = args.req("trace")?;
+    let cache_mib: u64 = args.num("cache-mib", 64)?;
+    let policy = match args.get("policy") {
+        Some(p) => pmx_cache::Policy::parse(p)
+            .ok_or_else(|| format!("unknown policy {p:?}; try lru, lfu or gdsf"))?,
+        None => pmx_cache::Policy::Gdsf,
+    };
+    let predictor = match args.get("predictor") {
+        Some("none") => None,
+        Some(p) => Some(
+            pmx_predict::Predictor::parse(p).ok_or_else(|| format!("unknown predictor {p:?}"))?,
+        ),
+        None => Some(pmx_predict::Predictor::StickyMarkov),
+    };
+    let budget: usize = args.num("budget", 16)?;
+    let queue_depth: usize = args.num("queue-depth", 8)?;
+    let fit: f64 = args.num("fit", 0.5)?;
+    let surface = load_surface(args);
+    engine_cmds::bench(
+        store,
+        trace,
+        cache_mib,
+        policy,
+        predictor,
+        budget,
+        queue_depth,
+        fit,
+        surface,
+        args.get("compare").is_some(),
+    )
 }
 
 fn cmd_probe(args: &Args) -> Result<(), String> {
@@ -320,7 +433,19 @@ fn cmd_synth(args: &Args) -> Result<(), String> {
         human(n)
     );
 
-    let mut t = Trace::synthetic(layers, experts, top_k, tokens, clusters, locality, 0xC0FFEE);
+    let persistence: f64 = args.num("persistence", 0.7)?;
+    let layer_coupling: f64 = args.num("layer-coupling", 0.45)?;
+    let mut t = Trace::synthetic_cfg(&pmx_trace::SynthConfig {
+        n_layers: layers,
+        n_experts: experts,
+        top_k,
+        tokens,
+        clusters,
+        locality,
+        persistence,
+        layer_coupling,
+        seed: 0xC0FFEE,
+    });
     // Planted clusters land on contiguous ids, which would make the checkpoint's
     // existing order already optimal. Real expert numbering has no such
     // locality, so scatter the labels unless asked not to.
@@ -330,7 +455,8 @@ fn cmd_synth(args: &Args) -> Result<(), String> {
     t.write(tracep)
         .map_err(|e| format!("writing {tracep}: {e}"))?;
     outln!(
-        "wrote {tracep} — {tokens} tokens, top-{top_k}, {clusters} planted clusters, locality {locality}"
+        "wrote {tracep} — {tokens} tokens, top-{top_k}, {clusters} clusters, \
+         locality {locality}, persistence {persistence}, layer-coupling {layer_coupling}"
     );
     let ca = CoActivation::from_trace(&t, 0);
     outln!(

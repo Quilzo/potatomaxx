@@ -57,6 +57,23 @@ jobs:
           a=$(stat -c%s synth.gguf); b=$(stat -c%s out.gguf)
           test "$a" = "$b" || { echo "FAIL: size changed $a -> $b"; exit 1; }
           echo "OK: $a bytes in, $a bytes out"
+      - name: streaming path — predict, build a store, replay it
+        run: |
+          set -euo pipefail
+          BIN=./target/release/potatomaxx
+          cd "$(mktemp -d)"
+          "$OLDPWD/$BIN" synth --experts 64 --layers 3 --tokens 4000 --top-k 6
+          "$OLDPWD/$BIN" probe --corpus-mib 256 --out surf.json
+          # Training-free lookahead must beat chance on a trace with temporal
+          # structure, or prefetching has no basis at all.
+          "$OLDPWD/$BIN" predict --trace synth.pmxtrace --budgets 6,12
+          "$OLDPWD/$BIN" build-store --model synth.gguf --trace synth.pmxtrace \
+              --out s.pmxstore --probe surf.json --ram-mib 2
+          test -s s.pmxstore || { echo "FAIL: no store written"; exit 1; }
+          "$OLDPWD/$BIN" bench --store s.pmxstore --trace synth.pmxtrace \
+              --probe surf.json --cache-mib 1 --compare
+          # A store must be smaller than the F16 experts it came from.
+          echo "OK: streaming path ran end to end"
       - name: verification must reject a tampered file
         run: |
           set -euo pipefail

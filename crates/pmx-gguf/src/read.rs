@@ -438,6 +438,54 @@ impl Gguf {
         self.file_len.saturating_sub(self.data_start)
     }
 
+    /// Read one slice along a tensor's last (expert) axis.
+    ///
+    /// Reading a whole stacked expert tensor can mean gigabytes; requantisation
+    /// only ever needs one expert at a time.
+    pub fn read_tensor_slice(&self, t: &TensorInfo, slice: u64) -> Result<Vec<u8>, GgufError> {
+        let n_slices = *t.dims.last().unwrap_or(&1);
+        if n_slices == 0 || slice >= n_slices {
+            return Err(GgufError::InvalidPlan(format!(
+                "slice {slice} out of range for tensor {:?} with {n_slices} slices",
+                t.name
+            )));
+        }
+        if t.nbytes % n_slices != 0 {
+            return Err(GgufError::InvalidPlan(format!(
+                "tensor {:?} ({} bytes) does not divide into {n_slices} slices",
+                t.name, t.nbytes
+            )));
+        }
+        let slice_bytes = t.nbytes / n_slices;
+        let abs = self
+            .data_start
+            .checked_add(t.offset)
+            .and_then(|v| v.checked_add(slice * slice_bytes))
+            .ok_or(GgufError::ArithmeticOverflow("slice absolute offset"))?;
+        let mut f = File::open(&self.path)?;
+        f.seek(SeekFrom::Start(abs))?;
+        let mut buf = vec![
+            0u8;
+            usize::try_from(slice_bytes)
+                .map_err(|_| GgufError::ArithmeticOverflow("slice length"))?
+        ];
+        f.read_exact(&mut buf)?;
+        Ok(buf)
+    }
+
+    /// Elements in one slice along a tensor's last axis.
+    pub fn slice_elements(&self, t: &TensorInfo) -> Result<u64, GgufError> {
+        let n_slices = *t.dims.last().unwrap_or(&1);
+        let n = t.n_elements()?;
+        if n_slices == 0 || n % n_slices != 0 {
+            return Err(GgufError::InvalidPlan(format!(
+                "tensor {:?} has {n} elements, not divisible by {n_slices} slices",
+                t.name
+            )));
+        }
+        Ok(n / n_slices)
+    }
+
     /// Read one tensor's bytes from disk.
     pub fn read_tensor(&self, t: &TensorInfo) -> Result<Vec<u8>, GgufError> {
         let mut f = File::open(&self.path)?;

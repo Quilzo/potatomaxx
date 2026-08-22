@@ -323,12 +323,93 @@ impl Trace {
         Ok(t)
     }
 
+    /// Generate a synthetic trace from an explicit configuration.
+    ///
+    /// Prefer this over [`Trace::synthetic`] when the trace will be used to
+    /// evaluate anything that depends on *temporal* structure. See
+    /// [`SynthConfig::persistence`].
+    pub fn synthetic_cfg(cfg: &SynthConfig) -> Self {
+        let mut x = cfg.seed | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let n_experts = cfg.n_experts;
+        let clusters = cfg.clusters.max(1).min(n_experts);
+        let per_cluster = (n_experts / clusters).max(1);
+        let top_k = cfg.top_k as usize;
+        let mut selections = Vec::with_capacity(cfg.tokens * cfg.n_layers as usize * top_k);
+        // Cluster carried between tokens, per layer, to create persistence.
+        let mut last_cluster = vec![0u32; cfg.n_layers as usize];
+        let mut have_last = false;
+
+        for _ in 0..cfg.tokens {
+            let mut prev_layer_cluster: Option<u32> = None;
+            for slot in last_cluster.iter_mut() {
+                let unit = |v: u64| (v >> 11) as f64 / (1u64 << 53) as f64;
+                let clustered = unit(next()) < cfg.locality;
+                // Three independent sources of structure, resolved in order of
+                // strength: carry the previous layer's cluster (cross-layer
+                // agreement), else the previous token's (temporal persistence),
+                // else draw fresh.
+                let couple = prev_layer_cluster.is_some() && unit(next()) < cfg.layer_coupling;
+                let keep = have_last && unit(next()) < cfg.persistence;
+                let c = if couple {
+                    prev_layer_cluster.expect("checked above")
+                } else if keep {
+                    *slot
+                } else {
+                    (next() % u64::from(clusters)) as u32
+                };
+                *slot = c;
+                prev_layer_cluster = Some(c);
+
+                let mut chosen: Vec<u32> = Vec::with_capacity(top_k);
+                let mut guard = 0u32;
+                while chosen.len() < top_k && guard < 10_000 {
+                    guard += 1;
+                    let e = if clustered {
+                        c * per_cluster + (next() % u64::from(per_cluster)) as u32
+                    } else {
+                        (next() % u64::from(n_experts)) as u32
+                    };
+                    let e = e.min(n_experts - 1);
+                    if !chosen.contains(&e) {
+                        chosen.push(e);
+                    }
+                }
+                while chosen.len() < top_k {
+                    let e = (next() % u64::from(n_experts)) as u32;
+                    if !chosen.contains(&e) {
+                        chosen.push(e);
+                    }
+                }
+                selections.extend_from_slice(&chosen);
+            }
+            have_last = true;
+        }
+        Trace {
+            n_layers: cfg.n_layers,
+            n_experts,
+            top_k: cfg.top_k,
+            selections,
+        }
+    }
+
     /// Generate a synthetic trace with planted cluster structure.
     ///
     /// Useful for tests and for demonstrating the pipeline without a
     /// multi-gigabyte checkpoint. `locality` in `0.0..=1.0` sets how often a
     /// token draws its experts from a single cluster rather than uniformly;
     /// 0.0 approximates random routing, for which no layout can help.
+    /// As [`Trace::synthetic_cfg`] with zero persistence.
+    ///
+    /// Retained because plenty of tests only care about co-activation structure.
+    /// Do not use it to evaluate temporal prediction: with no persistence there
+    /// is nothing across tokens to predict.
+    #[allow(clippy::too_many_arguments)]
     pub fn synthetic(
         n_layers: u32,
         n_experts: u32,
@@ -338,50 +419,17 @@ impl Trace {
         locality: f64,
         seed: u64,
     ) -> Self {
-        let mut x = seed | 1;
-        let mut next = move || {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            x
-        };
-        let clusters = n_clusters.max(1).min(n_experts);
-        let per_cluster = (n_experts / clusters).max(1);
-        let mut selections = Vec::with_capacity(n_tokens * n_layers as usize * top_k as usize);
-        for _ in 0..n_tokens {
-            for _ in 0..n_layers {
-                let clustered = ((next() >> 11) as f64 / (1u64 << 53) as f64) < locality;
-                let mut chosen: Vec<u32> = Vec::with_capacity(top_k as usize);
-                let c = (next() % u64::from(clusters)) as u32;
-                while chosen.len() < top_k as usize {
-                    let e = if clustered {
-                        let base = c * per_cluster;
-                        base + (next() % u64::from(per_cluster)) as u32
-                    } else {
-                        (next() % u64::from(n_experts)) as u32
-                    };
-                    let e = e.min(n_experts - 1);
-                    if !chosen.contains(&e) {
-                        chosen.push(e);
-                    } else if chosen.len() as u32 + 1 >= n_experts {
-                        break;
-                    }
-                }
-                while chosen.len() < top_k as usize {
-                    let e = (next() % u64::from(n_experts)) as u32;
-                    if !chosen.contains(&e) {
-                        chosen.push(e);
-                    }
-                }
-                selections.extend_from_slice(&chosen);
-            }
-        }
-        Trace {
+        Trace::synthetic_cfg(&SynthConfig {
             n_layers,
             n_experts,
             top_k,
-            selections,
-        }
+            tokens: n_tokens,
+            clusters: n_clusters,
+            locality,
+            persistence: 0.0,
+            layer_coupling: 0.0,
+            seed,
+        })
     }
 
     /// Apply a pseudorandom relabelling to expert ids.
@@ -411,6 +459,61 @@ impl Trace {
         }
         for e in self.selections.iter_mut() {
             *e = map[*e as usize];
+        }
+    }
+}
+
+/// Shape and structure of a synthetic trace.
+#[derive(Debug, Clone)]
+pub struct SynthConfig {
+    /// MoE layers.
+    pub n_layers: u32,
+    /// Experts per layer.
+    pub n_experts: u32,
+    /// Experts selected per token per layer.
+    pub top_k: u32,
+    /// Tokens to generate.
+    pub tokens: usize,
+    /// Planted co-activation clusters.
+    pub clusters: u32,
+    /// Probability a token draws its experts from a single cluster rather than
+    /// uniformly. Controls *within-token* co-activation.
+    pub locality: f64,
+    /// Probability a token reuses the previous token's cluster for a layer.
+    ///
+    /// Controls *across-token* structure, which is a different thing from
+    /// `locality` and easy to conflate. A trace with high locality but zero
+    /// persistence has strong co-activation and no temporal correlation at all —
+    /// nothing a lookahead predictor can use, and the reason this parameter
+    /// exists. Real routing shows adjacent-token overlap around twice a random
+    /// baseline, which corresponds to a persistence well above zero.
+    pub persistence: f64,
+    /// Probability a layer reuses the *previous layer's* cluster within the same
+    /// token.
+    ///
+    /// A third, independent axis. Real MoE stacks show strong cross-layer
+    /// agreement — consecutive blocks route to the same expert ids a large
+    /// fraction of the time — which is what makes it possible to predict layer
+    /// `n` from layer `n-1` and thus to prefetch before the router has run. With
+    /// this at zero, each layer routes independently and no cross-layer
+    /// predictor can beat guessing the hottest experts.
+    pub layer_coupling: f64,
+    /// Seed.
+    pub seed: u64,
+}
+
+impl Default for SynthConfig {
+    fn default() -> Self {
+        SynthConfig {
+            n_layers: 2,
+            n_experts: 32,
+            top_k: 4,
+            tokens: 4000,
+            clusters: 4,
+            locality: 0.85,
+            persistence: 0.6,
+            layer_coupling: 0.45,
+            seed: 0xC0FFEE,
         }
     }
 }
@@ -562,6 +665,76 @@ mod tests {
         assert!(
             adj_b < adj_a,
             "scattered adjacency {adj_b} should fall below contiguous {adj_a}"
+        );
+    }
+
+    #[test]
+    fn persistence_creates_adjacent_token_overlap() {
+        // Without persistence, consecutive tokens share experts only by chance.
+        // This is the property lookahead prediction depends on, and it is
+        // independent of within-token co-activation.
+        let overlap = |persistence: f64| -> f64 {
+            let t = Trace::synthetic_cfg(&SynthConfig {
+                n_layers: 1,
+                n_experts: 64,
+                top_k: 6,
+                tokens: 4000,
+                clusters: 8,
+                locality: 0.9,
+                persistence,
+                layer_coupling: 0.0,
+                seed: 31,
+            });
+            let mut shared = 0u64;
+            for tok in 1..t.n_tokens() {
+                let a = t.selection(tok - 1, 0);
+                let b = t.selection(tok, 0);
+                shared += b.iter().filter(|e| a.contains(e)).count() as u64;
+            }
+            shared as f64 / ((t.n_tokens() - 1) * 6) as f64
+        };
+        let none = overlap(0.0);
+        let high = overlap(0.9);
+        assert!(
+            high > none * 1.8,
+            "persistence 0.9 gave adjacent overlap {high:.3} vs {none:.3} at zero; \
+             lookahead prediction has nothing to learn without this"
+        );
+    }
+
+    #[test]
+    fn layer_coupling_creates_cross_layer_agreement() {
+        // The property that makes it possible to predict layer n from layer n-1,
+        // and therefore to have reads in flight before the router has run.
+        let agreement = |coupling: f64| -> f64 {
+            let t = Trace::synthetic_cfg(&SynthConfig {
+                n_layers: 6,
+                n_experts: 64,
+                top_k: 6,
+                tokens: 3000,
+                clusters: 8,
+                locality: 0.9,
+                persistence: 0.0,
+                layer_coupling: coupling,
+                seed: 77,
+            });
+            let mut shared = 0u64;
+            let mut n = 0u64;
+            for tok in 0..t.n_tokens() {
+                for l in 1..t.n_layers {
+                    let a = t.selection(tok, l - 1);
+                    let b = t.selection(tok, l);
+                    shared += b.iter().filter(|e| a.contains(e)).count() as u64;
+                    n += b.len() as u64;
+                }
+            }
+            shared as f64 / n as f64
+        };
+        let none = agreement(0.0);
+        let high = agreement(0.9);
+        assert!(
+            high > none * 1.8,
+            "coupling 0.9 gave cross-layer agreement {high:.3} vs {none:.3} at zero"
         );
     }
 

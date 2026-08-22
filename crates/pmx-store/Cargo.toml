@@ -1,0 +1,15 @@
+[package]
+name = "pmx-store"
+description = "The potatomaxx native expert store: per-expert precision, co-activation grouping, aligned direct reads."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+pmx-kernels = { path = "../pmx-kernels" }
+
+[lints]
+workspace = true

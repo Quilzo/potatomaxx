@@ -1,6 +1,6 @@
 [package]
-name = "pmx-cli"
-description = "The potatomaxx command line tool."
+name = "pmx-runtime"
+description = "Streaming expert-fetch runtime: lookahead prefetch, cost-aware cache, measured throughput."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,21 +8,13 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-[[bin]]
-name = "potatomaxx"
-path = "src/main.rs"
-
 [dependencies]
-pmx-gguf = { path = "../pmx-gguf" }
-pmx-probe = { path = "../pmx-probe" }
-pmx-trace = { path = "../pmx-trace" }
-pmx-partition = { path = "../pmx-partition" }
-pmx-plan = { path = "../pmx-plan" }
 pmx-cache = { path = "../pmx-cache" }
 pmx-kernels = { path = "../pmx-kernels" }
 pmx-predict = { path = "../pmx-predict" }
-pmx-runtime = { path = "../pmx-runtime" }
+pmx-probe = { path = "../pmx-probe" }
 pmx-store = { path = "../pmx-store" }
+pmx-trace = { path = "../pmx-trace" }
 
 [lints]
 workspace = true

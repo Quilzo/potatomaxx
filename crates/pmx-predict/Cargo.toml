@@ -1,0 +1,15 @@
+[package]
+name = "pmx-predict"
+description = "Router lookahead: predicting which experts a layer will select, early enough to prefetch them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+pmx-trace = { path = "../pmx-trace" }
+
+[lints]
+workspace = true

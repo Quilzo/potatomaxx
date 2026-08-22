@@ -3,18 +3,31 @@
 version = 3
 
 [[package]]
+name = "pmx-cache"
+version = "0.1.0"
+
+[[package]]
 name = "pmx-cli"
 version = "0.1.0"
 dependencies = [
+ "pmx-cache",
  "pmx-gguf",
+ "pmx-kernels",
  "pmx-partition",
  "pmx-plan",
+ "pmx-predict",
  "pmx-probe",
+ "pmx-runtime",
+ "pmx-store",
  "pmx-trace",
 ]
 
 [[package]]
 name = "pmx-gguf"
+version = "0.1.0"
+
+[[package]]
+name = "pmx-kernels"
 version = "0.1.0"
 
 [[package]]
@@ -33,8 +46,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "pmx-predict"
+version = "0.1.0"
+dependencies = [
+ "pmx-trace",
+]
+
+[[package]]
 name = "pmx-probe"
 version = "0.1.0"
+
+[[package]]
+name = "pmx-runtime"
+version = "0.1.0"
+dependencies = [
+ "pmx-cache",
+ "pmx-kernels",
+ "pmx-predict",
+ "pmx-probe",
+ "pmx-store",
+ "pmx-trace",
+]
+
+[[package]]
+name = "pmx-store"
+version = "0.1.0"
+dependencies = [
+ "pmx-kernels",
+]
 
 [[package]]
 name = "pmx-trace"

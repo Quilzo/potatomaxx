@@ -138,27 +138,84 @@ pub const DEFAULT_LADDER: &[BitOption] = &[
     },
 ];
 
-/// Per-expert quality sensitivity, and the loss proxy applied to it.
+/// How much quality each expert loses at each precision.
+///
+/// Two sources are supported, and which one is in use matters a great deal:
+///
+/// * [`Sensitivity::measured`] carries real per-expert, per-precision error —
+///   normally the round-trip RMSE of actually quantising that expert's weights.
+///   This is what `potatomaxx build-store` uses.
+/// * [`Sensitivity::uniform`] falls back to an analytic proxy, `4^-bits`.
+///
+/// The proxy is a poor absolute model and must not be trusted to set a loss
+/// budget. Against an F16 baseline it reports an enormous loss for any
+/// quantisation at all, so a budget of 1.10 refuses every demotion and the
+/// allocator silently does nothing — reporting a 1.00x speedup and a perfect
+/// loss ratio while having changed not one bit. That is exactly what happened
+/// before measurement was wired in, which is why the distinction is surfaced
+/// here rather than buried in a default.
 #[derive(Debug, Clone)]
 pub struct Sensitivity {
-    /// Per-expert scale. Uniform 1.0 if nothing better is known.
+    /// Per-expert scale, used only by the analytic proxy.
     pub scale: Vec<f64>,
+    /// `measured[e]` maps bits to observed error for expert `e`.
+    measured: Vec<Vec<(f64, f64)>>,
 }
 
 impl Sensitivity {
-    /// Assume every expert is equally sensitive.
+    /// Fall back to the analytic proxy, assuming equal sensitivity.
     pub fn uniform(n: usize) -> Self {
         Sensitivity {
             scale: vec![1.0; n],
+            measured: Vec::new(),
         }
     }
 
-    /// Proxy loss increase for storing expert `e` at `bits`.
+    /// Use measured error. `per_expert[e]` is a list of `(bits, error)` pairs.
     ///
-    /// Quantisation error for a well-behaved quantiser falls as `4^-bits`; this
-    /// is that shape, scaled per expert. It is a stand-in for measurement, and
-    /// documented as such.
+    /// Non-finite entries are dropped. Admitting one would make every comparison
+    /// against it false, so the allocator would quietly refuse every demotion and
+    /// still report success — the failure is invisible unless you look for it.
+    pub fn measured(per_expert: Vec<Vec<(f64, f64)>>) -> Self {
+        let n = per_expert.len();
+        let measured = per_expert
+            .into_iter()
+            .map(|rows| {
+                rows.into_iter()
+                    .filter(|(b, e)| b.is_finite() && e.is_finite())
+                    .collect()
+            })
+            .collect();
+        Sensitivity {
+            scale: vec![1.0; n],
+            measured,
+        }
+    }
+
+    /// Whether this carries real measurements rather than the proxy.
+    pub fn is_measured(&self) -> bool {
+        !self.measured.is_empty()
+    }
+
+    /// Loss increase for storing expert `e` at `bits`.
+    ///
+    /// Measured values snap to the nearest recorded bit width; the proxy is used
+    /// only where no measurement exists.
     pub fn delta_loss(&self, e: usize, bits: f64) -> f64 {
+        if let Some(rows) = self.measured.get(e) {
+            if !rows.is_empty() {
+                let mut best = rows[0];
+                let mut bd = (rows[0].0 - bits).abs();
+                for r in rows.iter().skip(1) {
+                    let d = (r.0 - bits).abs();
+                    if d < bd {
+                        bd = d;
+                        best = *r;
+                    }
+                }
+                return best.1;
+            }
+        }
         let s = self.scale.get(e).copied().unwrap_or(1.0);
         s * 4f64.powf(-bits)
     }
@@ -218,6 +275,46 @@ impl AllocPlan {
     }
 }
 
+/// How much quality loss an allocation may spend.
+///
+/// A multiplier on the baseline's loss is the obvious formulation and it is
+/// degenerate: once sensitivity is *measured*, the baseline is the reference and
+/// its error is zero, so any multiple of it is still zero and no demotion is ever
+/// permitted. [`ErrorBudget::UniformAt`] avoids that and is also how a
+/// practitioner actually reasons — "no worse than storing everything at 4 bits".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ErrorBudget {
+    /// Allow at most this frequency-weighted expected error, in the units of the
+    /// sensitivity measurement.
+    Absolute(f64),
+    /// Allow at most the error a uniform allocation at `bits` would incur.
+    UniformAt(f64),
+    /// Allow at most `factor` times the baseline's error.
+    ///
+    /// Only meaningful when the baseline is itself lossy relative to the
+    /// sensitivity reference.
+    RelativeToBaseline(f64),
+}
+
+impl ErrorBudget {
+    /// Resolve to an absolute ceiling.
+    fn ceiling(
+        self,
+        n: usize,
+        rate: &dyn Fn(usize) -> f64,
+        sens: &Sensitivity,
+        baseline_bits: f64,
+    ) -> f64 {
+        let weighted =
+            |bits: f64| -> f64 { (0..n).map(|e| rate(e) * sens.delta_loss(e, bits)).sum() };
+        match self {
+            ErrorBudget::Absolute(v) => v,
+            ErrorBudget::UniformAt(bits) => weighted(bits),
+            ErrorBudget::RelativeToBaseline(f) => weighted(baseline_bits) * f,
+        }
+    }
+}
+
 /// Inputs to allocation.
 #[derive(Debug, Clone)]
 pub struct PlanConfig {
@@ -231,9 +328,8 @@ pub struct PlanConfig {
     pub ladder: Vec<BitOption>,
     /// Tier bandwidths.
     pub tier_cost: TierCost,
-    /// Ceiling on proxy loss growth. Allocation stops crushing experts once
-    /// expected loss would exceed `baseline_loss * loss_budget`.
-    pub loss_budget: f64,
+    /// How much quality loss the allocation may spend.
+    pub error_budget: ErrorBudget,
 }
 
 impl Default for PlanConfig {
@@ -244,7 +340,7 @@ impl Default for PlanConfig {
             baseline_bits: 4.5,
             ladder: DEFAULT_LADDER.to_vec(),
             tier_cost: TierCost::default(),
-            loss_budget: 1.10,
+            error_budget: ErrorBudget::UniformAt(4.5),
         }
     }
 }
@@ -328,7 +424,10 @@ pub fn allocate(ca: &CoActivation, sens: &Sensitivity, cfg: &PlanConfig) -> Allo
         .sum();
 
     let mut cur_loss: f64 = (0..n).map(|e| loss_of(e, 0)).sum();
-    let loss_ceiling = baseline_loss * cfg.loss_budget;
+    let rate_of = |e: usize| ca.freq[e] as f64 / total_tokens;
+    let loss_ceiling = cfg
+        .error_budget
+        .ceiling(n, &rate_of, sens, cfg.baseline_bits);
 
     loop {
         let mut best: Option<(f64, usize)> = None;
@@ -425,6 +524,14 @@ mod tests {
         CoActivation::from_trace(&t, 0)
     }
 
+    /// Frequency-weighted expected loss if every expert were stored at `bits`.
+    fn uniform_loss(ca: &CoActivation, sens: &Sensitivity, bits: f64) -> f64 {
+        let total = ca.tokens.max(1) as f64;
+        (0..ca.n_experts as usize)
+            .map(|e| (ca.freq[e] as f64 / total) * sens.delta_loss(e, bits))
+            .sum()
+    }
+
     fn cfg(n_resident_experts: u64) -> PlanConfig {
         let weights = 4 * 1024 * 1024u64;
         PlanConfig {
@@ -433,6 +540,37 @@ mod tests {
             baseline_bits: 4.5,
             ..PlanConfig::default()
         }
+    }
+
+    #[test]
+    fn non_finite_measurements_are_dropped() {
+        let sens = Sensitivity::measured(vec![vec![
+            (16.0, 0.0),
+            (4.5, f64::NAN),
+            (2.5, f64::INFINITY),
+        ]]);
+        // Only the finite row survives, so every query resolves to it.
+        assert!(sens.delta_loss(0, 4.5).is_finite());
+        assert_eq!(sens.delta_loss(0, 4.5), 0.0);
+    }
+
+    #[test]
+    fn measured_sensitivity_overrides_the_proxy() {
+        // Two experts with deliberately opposite error profiles: expert 0 is
+        // robust at low precision, expert 1 is not. The allocator must follow the
+        // measurement, not the uniform proxy.
+        let measured = vec![
+            vec![(8.25, 0.0), (4.5, 0.001), (2.5, 0.002)],
+            vec![(8.25, 0.0), (4.5, 0.500), (2.5, 2.000)],
+        ];
+        let sens = Sensitivity::measured(measured);
+        assert!(sens.is_measured());
+        assert!(sens.delta_loss(1, 2.5) > sens.delta_loss(0, 2.5) * 100.0);
+        // Nearest-bits lookup, not the proxy.
+        assert!((sens.delta_loss(0, 4.4) - 0.001).abs() < 1e-12);
+        // Unmeasured index falls back to the proxy rather than panicking.
+        assert!(sens.delta_loss(9, 4.0) > 0.0);
+        assert!(!Sensitivity::uniform(2).is_measured());
     }
 
     #[test]
@@ -500,25 +638,27 @@ mod tests {
     }
 
     #[test]
-    fn allocation_respects_the_loss_budget() {
+    fn allocation_respects_a_tight_precision_ceiling() {
         let ca = skewed(32);
         let mut c = cfg(8);
-        c.loss_budget = 1.02;
-        let p = allocate(&ca, &Sensitivity::uniform(32), &c);
+        c.error_budget = ErrorBudget::UniformAt(6.0);
+        let sens = Sensitivity::uniform(32);
+        let p = allocate(&ca, &sens, &c);
+        let ceiling = uniform_loss(&ca, &sens, 6.0);
         assert!(
-            p.loss_ratio() <= 1.02 + 1e-9,
-            "proxy loss ratio {:.4} exceeded the 1.02 budget",
-            p.loss_ratio()
+            p.planned_loss <= ceiling * 1.000_001,
+            "expected loss {} exceeded the uniform-6-bit ceiling {ceiling}",
+            p.planned_loss
         );
     }
 
     #[test]
-    fn a_tighter_loss_budget_yields_less_speedup() {
+    fn a_tighter_precision_ceiling_yields_less_speedup() {
         let ca = skewed(32);
         let mut tight = cfg(8);
-        tight.loss_budget = 1.01;
+        tight.error_budget = ErrorBudget::UniformAt(6.5);
         let mut loose = cfg(8);
-        loose.loss_budget = 1.50;
+        loose.error_budget = ErrorBudget::UniformAt(2.5);
         let a = allocate(&ca, &Sensitivity::uniform(32), &tight);
         let b = allocate(&ca, &Sensitivity::uniform(32), &loose);
         assert!(
@@ -530,27 +670,106 @@ mod tests {
     }
 
     #[test]
-    fn a_high_precision_checkpoint_keeps_the_no_change_option() {
-        // An F16 checkpoint against a K-quant ladder: the top rung must be
-        // "keep", so the loss ratio starts at 1.0 rather than exploding.
+    fn allocation_stays_within_a_uniform_precision_ceiling() {
+        // The budget's promise: the result is no worse than storing everything at
+        // the named bit width. It says nothing about being close to the source,
+        // which is the caller's choice to make.
         let ca = skewed(32);
+        let sens = Sensitivity::uniform(32);
         let weights = 4 * 1024 * 1024u64;
         let c = PlanConfig {
             weights_per_expert: weights,
             resident_budget_bytes: 8 * bytes_at(weights, 16.0),
             baseline_bits: 16.0,
-            loss_budget: 1.10,
+            error_budget: ErrorBudget::UniformAt(4.5),
             ..PlanConfig::default()
         };
-        let p = allocate(&ca, &Sensitivity::uniform(32), &c);
+        let p = allocate(&ca, &sens, &c);
+        let ceiling = uniform_loss(&ca, &sens, 4.5);
         assert!(
-            p.loss_ratio() <= 1.10 + 1e-9,
-            "loss ratio {:.4} must respect the budget even when the ladder sits far below the checkpoint",
-            p.loss_ratio()
+            p.planned_loss <= ceiling * 1.000_001,
+            "expected loss {} exceeded the uniform-4.5-bit ceiling {ceiling}",
+            p.planned_loss
         );
         assert!(
             p.speedup() >= 1.0,
             "allocation should never be slower than the baseline"
+        );
+    }
+
+    #[test]
+    fn a_budget_relative_to_the_baseline_is_degenerate_under_measurement() {
+        // Documents why ErrorBudget::UniformAt exists. Once sensitivity is
+        // measured, the baseline *is* the reference and its error is zero, so any
+        // multiple of it is still zero: RelativeToBaseline permits nothing and the
+        // allocator silently does nothing at all. Before this was understood, the
+        // tool reported a 1.00x speedup and a perfect loss ratio while having
+        // changed not one bit.
+        let ca = skewed(32);
+        let rows: Vec<Vec<(f64, f64)>> = (0..32)
+            .map(|_| vec![(16.0, 0.0), (8.25, 0.001), (4.5, 0.002), (2.5, 0.004)])
+            .collect();
+        let sens = Sensitivity::measured(rows);
+        let weights = 4 * 1024 * 1024u64;
+        let base = PlanConfig {
+            weights_per_expert: weights,
+            resident_budget_bytes: 8 * bytes_at(weights, 16.0),
+            baseline_bits: 16.0,
+            ..PlanConfig::default()
+        };
+
+        let degenerate = allocate(
+            &ca,
+            &sens,
+            &PlanConfig {
+                error_budget: ErrorBudget::RelativeToBaseline(1.10),
+                ..base.clone()
+            },
+        );
+        assert!(
+            (degenerate.speedup() - 1.0).abs() < 1e-9,
+            "a baseline-relative budget should permit nothing here, got {:.3}x",
+            degenerate.speedup()
+        );
+
+        let usable = allocate(
+            &ca,
+            &sens,
+            &PlanConfig {
+                error_budget: ErrorBudget::UniformAt(4.5),
+                ..base.clone()
+            },
+        );
+        assert!(
+            usable.speedup() > 1.5,
+            "a uniform-precision budget should unlock real demotion, got {:.3}x",
+            usable.speedup()
+        );
+    }
+
+    #[test]
+    fn an_absolute_budget_is_honoured_exactly() {
+        let ca = skewed(24);
+        let rows: Vec<Vec<(f64, f64)>> = (0..24)
+            .map(|_| vec![(16.0, 0.0), (8.25, 0.01), (4.5, 0.02), (2.5, 0.05)])
+            .collect();
+        let sens = Sensitivity::measured(rows);
+        let weights = 1024 * 1024u64;
+        let p = allocate(
+            &ca,
+            &sens,
+            &PlanConfig {
+                weights_per_expert: weights,
+                resident_budget_bytes: 4 * bytes_at(weights, 16.0),
+                baseline_bits: 16.0,
+                error_budget: ErrorBudget::Absolute(0.015),
+                ..PlanConfig::default()
+            },
+        );
+        assert!(
+            p.planned_loss <= 0.015 + 1e-12,
+            "expected loss {} exceeded the absolute budget 0.015",
+            p.planned_loss
         );
     }
 
