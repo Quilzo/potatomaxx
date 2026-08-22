@@ -195,7 +195,9 @@ pub const ENOSYS: i32 = 38;
 mod imp {
     use super::*;
 
-    unsafe extern "C" {
+    // `extern` blocks are implicitly unsafe to call in edition 2021; the
+    // `unsafe extern` spelling needs Rust 1.82 and would break the declared MSRV.
+    extern "C" {
         fn syscall(num: i64, ...) -> i64;
     }
 

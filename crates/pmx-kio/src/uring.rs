@@ -525,7 +525,9 @@ unsafe fn close_fd(fd: RawFd) {
 }
 
 unsafe fn sys_close(fd: RawFd) -> i64 {
-    unsafe extern "C" {
+    // `extern` blocks are implicitly unsafe to call in edition 2021; the
+    // `unsafe extern` spelling needs Rust 1.82 and would break the declared MSRV.
+    extern "C" {
         fn close(fd: i32) -> i32;
     }
     unsafe { close(fd) as i64 }

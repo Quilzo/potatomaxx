@@ -49,7 +49,7 @@ priority bug in the project.
 ## Running things
 
 ```bash
-cargo test                 # 160 tests, no network, no fixtures needed; debug
+cargo test                 # 162 tests, no network, no fixtures needed; debug
                            # builds enable integer overflow checks, so run both
 cargo test --release
 cargo clippy --all-targets -- -D warnings

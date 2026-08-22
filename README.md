@@ -9,20 +9,39 @@ runs. That makes decoding a storage problem, and storage cares enormously about
 GPU — the same NVMe delivers **0.099 GB/s at queue depth 1 and 3.29 GB/s at depth
 16**. A factor of **33**, from nothing but concurrency.
 
-`potatomaxx` attacks that in three ways, and measures each rather than asserting
-it:
+`potatomaxx` is the toolkit for attacking that, and its distinguishing habit is
+that it **measures every claim and reports the ones that fail**. Three levers
+survive measurement:
 
-1. **Layout** — reorder experts on disk so the ones that fire together are
-   adjacent, turning scattered slice reads into contiguous runs. Output is a
-   **drop-in GGUF**: same tensor names, same shapes, byte-identical weights.
-   llama.cpp, Colibri and anything else read it unchanged.
+1. **Queue depth** — worth **33×** on the device above, and the reason most
+   engines leave performance on the table. `potatomaxx kio` compares `pread`, a
+   thread pool and io_uring (batched and sliding-window) with `RWF_DONTCACHE`,
+   huge pages and `cachestat`, and recommends from the measurement rather than
+   from a preference.
 2. **Precision** — store each expert at its own bit width, chosen from *measured*
-   quantisation error and how often the expert is actually used. 3.58× less
-   weight movement at 0.31× the size on the synthetic model.
+   per-expert quantisation error and how often the expert is actually used. Not
+   expressible in GGUF, since a tensor carries one type.
 3. **Prefetch** — predict which experts a layer will select before its router has
-   run, because you cannot queue reads you have not predicted.
+   run, because you cannot queue reads you have not predicted. Training-free
+   predictors reach 0.739 recall at 4× budget against 0.100 chance.
 
-Zero dependencies, `std` only. 160 tests. GPL-2.0-or-later.
+And one lever that **did not** survive, kept here because it is the most useful
+thing in the repository:
+
+- **Layout** — reorder experts on disk so co-firing experts are adjacent, emitting
+  a **drop-in GGUF** with byte-identical weights. The project was built around
+  this. A survey of seven real MoE checkpoints found **none** with expert slices
+  small enough to benefit — the smallest, granite, is 288 KiB against a ~256 KiB
+  threshold; DeepSeek-V2-Lite is 1584 KiB. It is correct, provably
+  weight-preserving, and **helps no model that currently exists.**
+
+That last point is not a disclaimer buried at the bottom. A tool whose job is
+telling you whether an optimisation helps is worth nothing if it cannot be trusted
+when it says no — so the repository records what contradicted its own design, and
+the first real-model verdict was *leave this alone*.
+
+Zero dependencies, `std` only. 162 tests. Validated against a real MoE checkpoint.
+GPL-2.0-or-later.
 
 ```console
 $ potatomaxx kio
@@ -305,8 +324,8 @@ and its invariants written down:
 ## Testing
 
 ```bash
-cargo test                  # 160 tests, debug: integer overflow checks on
-cargo test --release        # 160 tests, release
+cargo test                  # 162 tests, debug: integer overflow checks on
+cargo test --release        # 162 tests, release
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
@@ -374,6 +393,13 @@ actually accept a project like this and why most cannot yet — the ASF requires
 Apache-2.0, the SFC requires a project over a year old with an established
 community, and LF AI & Data requires paid membership. GNU is the one that
 evaluates work in progress, and the materials are prepared there.
+
+## Authors
+
+Written and maintained by **[rsh1k](https://github.com/rsh1k)** (Rashik Adhikari).
+See [AUTHORS](AUTHORS). Contributors keep copyright in their own work — there is
+no CLA and no copyright assignment, which also means the licence cannot be
+quietly changed later.
 
 ## Licence
 

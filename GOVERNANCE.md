@@ -5,8 +5,9 @@ describing a structure that does not exist yet.
 
 ## Current state
 
-The project was started in 2026 by [Quilzo](https://github.com/Quilzo) and
-currently has a single maintainer. Decisions are made in public on the issue
+The project was started in 2026 by **[rsh1k](https://github.com/rsh1k)**
+(Rashik Adhikari) under the [Quilzo](https://github.com/Quilzo) organisation, and
+currently has a single maintainer. See [AUTHORS](AUTHORS). Decisions are made in public on the issue
 tracker and in pull requests.
 
 ## Decision making

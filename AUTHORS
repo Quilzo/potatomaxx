@@ -1,0 +1,12 @@
+# Authors and contributors
+#
+# Listed in order of first contribution. Contributors retain copyright in their
+# own work; there is no copyright assignment and no CLA. See GOVERNANCE.md.
+
+Rashik Adhikari <rashik1144@gmail.com>   (rsh1k)
+    Author and maintainer. Design, implementation, and the measurement work.
+
+# Thanks
+#
+# The findings here lean on published work by others, cited where used in
+# docs/REAL-MODEL-RESULTS.md, docs/KERNEL.md and the crate documentation.
