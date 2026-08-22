@@ -1,8 +1,17 @@
 # Outreach drafts
 
-Ready-to-send materials, in the order that makes sense. **Nothing here has been
-sent** — each goes out in the maintainer's own name, and mailing-list archives are
-permanent.
+Ready-to-send materials, in the order that makes sense.
+
+## Sent
+
+| Date | Where | Link |
+|---|---|---|
+| 2026-08-22 | llama.cpp Discussions, *Show and tell* | [#27534](https://github.com/ggml-org/llama.cpp/discussions/27534) |
+
+## Not yet sent
+
+Each remaining item goes out in the maintainer's own name, and mailing-list
+archives are permanent.
 
 The sequencing is deliberate: foundations ask "who uses this?", and right now the
 honest answer is nobody. These are how that changes.
