@@ -9,6 +9,21 @@ They are kept because they are the most useful thing here.
 
 ## Unreleased
 
+## 0.1.1 — 2026-08-22
+
+Corrective release.
+
+- **Fixed the declared MSRV.** `Cargo.toml` said `rust-version = "1.75"`, but two
+  `unsafe extern "C"` blocks in `pmx-kio` require Rust 1.82. In edition 2021 an
+  `extern` block is already implicitly unsafe to call, so the `unsafe` spelling
+  bought nothing; dropping it makes 1.75 true. This matters because distributions
+  ship older Rust than this is developed against, and 0.1.0 would have failed to
+  build on the version it claimed to support.
+- Added `AUTHORS`; recorded that contributors keep copyright in their own work,
+  with no CLA and no assignment.
+- README now leads with the three levers that survived measurement and states
+  above the fold that layout helps no model that currently exists.
+
 ### Real-model validation
 
 First run against a real mixture-of-experts checkpoint (IBM Granite 3.0

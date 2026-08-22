@@ -4,11 +4,11 @@ version = 3
 
 [[package]]
 name = "pmx-cache"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "pmx-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pmx-cache",
  "pmx-gguf",
@@ -25,19 +25,19 @@ dependencies = [
 
 [[package]]
 name = "pmx-gguf"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "pmx-kernels"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "pmx-kio"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "pmx-partition"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pmx-probe",
  "pmx-trace",
@@ -45,25 +45,25 @@ dependencies = [
 
 [[package]]
 name = "pmx-plan"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pmx-trace",
 ]
 
 [[package]]
 name = "pmx-predict"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pmx-trace",
 ]
 
 [[package]]
 name = "pmx-probe"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "pmx-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pmx-cache",
  "pmx-kernels",
@@ -75,11 +75,11 @@ dependencies = [
 
 [[package]]
 name = "pmx-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pmx-kernels",
 ]
 
 [[package]]
 name = "pmx-trace"
-version = "0.1.0"
+version = "0.1.1"

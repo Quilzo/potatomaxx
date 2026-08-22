@@ -8,7 +8,7 @@
 # https://www.gnu.org/prep/standards/html_node/Makefile-Conventions.html
 
 PACKAGE     = potatomaxx
-VERSION     = 0.1.0
+VERSION     = 0.1.1
 
 # GNU directory variables. Overridable, and DESTDIR is honoured everywhere.
 prefix      ?= /usr/local
