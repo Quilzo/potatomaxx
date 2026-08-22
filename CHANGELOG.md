@@ -9,6 +9,38 @@ They are kept because they are the most useful thing here.
 
 ## Unreleased
 
+### Safety
+
+- **The precision allocator can no longer silently destroy a model.** Under 0.5%
+  of experts produce extreme activation outliers that sustain attention sinks;
+  pruning one costs 21–27% accuracy and collapses reasoning models
+  ([arXiv:2507.23279](https://arxiv.org/abs/2507.23279)). Such an expert can be
+  *cold*, so frequency-based allocation singles it out for the harshest
+  quantisation, and its own round-trip error looks ordinary so the budget misses
+  it. Added `protected_experts`, a hard `floor_bits`, and
+  `require_protection_list` — **default true**, meaning nothing is demoted at all
+  until an outlier analysis is supplied. Detection needs one forward pass and is
+  not implemented yet; `build-store` says so loudly.
+
+### Fixed
+
+- **Stores could inflate rather than shrink.** The bit ladder was not capped at
+  the source precision, so a Q4_K checkpoint could be written at 6.5 bits —
+  more bytes to move, and no quality recovered, since upsampling cannot restore
+  information the source never had. On real Granite the store came out 1.09× the
+  source; it is now 0.80× with 1.33× faster movement.
+- **`baseline_bits` averaged across mixed-precision layers.** A `Q4_K_M` build
+  puts Q4_K and Q6_K expert tensors in the same layer, and capping at the mean
+  inflated the Q4_K ones. Now capped at the layer's *minimum* precision, which
+  can only reduce.
+- Corrected the novelty claim on frequency-based bit allocation: MC-MoE
+  (ICLR 2025) already does this. See `docs/ROADMAP.md`.
+
+### Added
+
+- `docs/ROADMAP.md` — what to build next, ranked against current research, with
+  citations.
+
 ## 0.1.1 — 2026-08-22
 
 Corrective release.

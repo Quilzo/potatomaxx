@@ -331,6 +331,32 @@ pub struct PlanConfig {
     pub tier_cost: TierCost,
     /// How much quality loss the allocation may spend.
     pub error_budget: ErrorBudget,
+    /// Experts that must never be demoted below `baseline_bits`.
+    ///
+    /// This exists because allocating bits by access frequency has a failure mode
+    /// that frequency cannot see. A small number of experts — under 0.5% of the
+    /// total, one to ten in a whole model — produce extreme activation outliers
+    /// in their `down_proj` output, which propagate through the residual stream
+    /// and sustain the model's attention sinks. Pruning them costs 21–27% average
+    /// accuracy, 52–74% on GSM8K, and collapses reasoning models to near zero.
+    ///
+    /// Such an expert can be *cold*. Frequency-based allocation would quantise it
+    /// hardest of all, and the round-trip error of its own weights looks entirely
+    /// ordinary, so the error budget does not catch it either: the damage shows up
+    /// in the activations it produces, not in the weights themselves.
+    ///
+    /// They cannot be identified from weight magnitude — high magnitude is not
+    /// sufficient — but they are identifiable from a single forward pass, and are
+    /// model-specific and stable across post-training. Until such an analysis is
+    /// supplied, `require_protection_list` refuses to demote anything.
+    pub protected_experts: Vec<u32>,
+    /// Refuse to demote any expert while `protected_experts` is empty.
+    ///
+    /// Defaults to true, deliberately. The safe failure mode for an unverified
+    /// model is to change nothing.
+    pub require_protection_list: bool,
+    /// Never allocate fewer bits than this to any expert.
+    pub floor_bits: f64,
 }
 
 impl Default for PlanConfig {
@@ -342,6 +368,9 @@ impl Default for PlanConfig {
             ladder: DEFAULT_LADDER.to_vec(),
             tier_cost: TierCost::default(),
             error_budget: ErrorBudget::UniformAt(4.5),
+            protected_experts: Vec::new(),
+            require_protection_list: true,
+            floor_bits: 2.5,
         }
     }
 }
@@ -359,29 +388,31 @@ fn bytes_at(weights: u64, bits: f64) -> u64 {
 /// ladder bottoms out or the loss budget is reached.
 pub fn allocate(ca: &CoActivation, sens: &Sensitivity, cfg: &PlanConfig) -> AllocPlan {
     let n = ca.n_experts as usize;
-    let mut ladder = cfg.ladder.clone();
+    // Build the ladder as: "keep the source precision", then every rung strictly
+    // below it. Rungs *above* the baseline are removed, because storing a Q4_K
+    // tensor at 6.5 bits cannot recover information the source never had -- it
+    // simply costs more bytes to move for no quality gain. Before this, a ladder
+    // topping out above the source precision silently inflated the store, which
+    // is how a real Q4_K checkpoint came out at 0.99x its original size instead
+    // of smaller.
+    let mut ladder: Vec<BitOption> = cfg
+        .ladder
+        .iter()
+        .copied()
+        .filter(|o| o.bits < cfg.baseline_bits - 1e-9)
+        .collect();
     ladder.sort_by(|a, b| {
         b.bits
             .partial_cmp(&a.bits)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    // "Leave it alone" must always be the top rung. Otherwise, for a checkpoint
-    // stored above the ladder's ceiling (an F16 model against a K-quant ladder),
-    // every expert starts already degraded and the loss budget polices
-    // demotions from a baseline nobody chose. Keeping the source precision on
-    // the ladder makes the no-change option reachable and the budget meaningful.
-    if ladder
-        .first()
-        .map_or(true, |top| cfg.baseline_bits > top.bits)
-    {
-        ladder.insert(
-            0,
-            BitOption {
-                bits: cfg.baseline_bits,
-                label: "keep",
-            },
-        );
-    }
+    ladder.insert(
+        0,
+        BitOption {
+            bits: cfg.baseline_bits,
+            label: "keep",
+        },
+    );
 
     // Residency: highest frequency first, until the budget is exhausted. Sizing
     // uses the *baseline* precision, since residency is decided before bits.
@@ -424,6 +455,11 @@ pub fn allocate(ca: &CoActivation, sens: &Sensitivity, cfg: &PlanConfig) -> Allo
         })
         .sum();
 
+    // Refuse to demote anything if no outlier-expert analysis has been supplied.
+    // See PlanConfig::protected_experts for why frequency alone is not safe.
+    let unverified = cfg.require_protection_list && cfg.protected_experts.is_empty();
+    let protected: std::collections::HashSet<u32> = cfg.protected_experts.iter().copied().collect();
+
     let mut cur_loss: f64 = (0..n).map(|e| loss_of(e, 0)).sum();
     let rate_of = |e: usize| ca.freq[e] as f64 / total_tokens;
     let loss_ceiling = cfg
@@ -431,10 +467,21 @@ pub fn allocate(ca: &CoActivation, sens: &Sensitivity, cfg: &PlanConfig) -> Allo
         .ceiling(n, &rate_of, sens, cfg.baseline_bits);
 
     loop {
+        if unverified {
+            break;
+        }
         let mut best: Option<(f64, usize)> = None;
         for e in 0..n {
             let lvl = level[e];
             if lvl + 1 >= ladder.len() {
+                continue;
+            }
+            // An expert on the protection list stays at the top of the ladder.
+            if protected.contains(&(e as u32)) {
+                continue;
+            }
+            // Never go below the floor, whatever the budget would allow.
+            if ladder[lvl + 1].bits < cfg.floor_bits {
                 continue;
             }
             let time_saved = seconds_of(e, lvl, tier[e]) - seconds_of(e, lvl + 1, tier[e]);
@@ -499,6 +546,16 @@ pub fn allocate(ca: &CoActivation, sens: &Sensitivity, cfg: &PlanConfig) -> Allo
     }
 }
 
+/// Whether an allocation actually changed anything.
+///
+/// Distinguishes "the allocator ran and concluded nothing was worth demoting"
+/// from "the allocator refused to run because the model was unverified". Both
+/// report a 1.00x speedup, and conflating them is how a safety guard becomes
+/// invisible.
+pub fn demoted_any(plan: &AllocPlan, baseline_bits: f64) -> bool {
+    plan.experts.iter().any(|a| a.bits < baseline_bits - 1e-9)
+}
+
 /// Share of selections served from RAM under this plan.
 pub fn hit_rate(plan: &AllocPlan) -> f64 {
     let total: u64 = plan.experts.iter().map(|a| a.freq).sum();
@@ -543,6 +600,17 @@ mod tests {
         }
     }
 
+    /// As [`cfg`], with the outlier-expert guard waived.
+    ///
+    /// Tests that exercise budget arithmetic must opt out explicitly, so the
+    /// guard's default cannot be silently weakened by a test needing it off.
+    fn cfg_unguarded(n_resident_experts: u64) -> PlanConfig {
+        PlanConfig {
+            require_protection_list: false,
+            ..cfg(n_resident_experts)
+        }
+    }
+
     #[test]
     fn non_finite_measurements_are_dropped() {
         let sens = Sensitivity::measured(vec![vec![
@@ -572,6 +640,61 @@ mod tests {
         // Unmeasured index falls back to the proxy rather than panicking.
         assert!(sens.delta_loss(9, 4.0) > 0.0);
         assert!(!Sensitivity::uniform(2).is_measured());
+    }
+
+    #[test]
+    fn an_unverified_model_is_not_demoted_at_all() {
+        // The safe default: with no outlier-expert analysis supplied, allocation
+        // changes nothing rather than risking a Super Expert.
+        let ca = skewed(32);
+        let p = allocate(&ca, &Sensitivity::uniform(32), &cfg(8));
+        assert!(
+            !demoted_any(&p, 4.5),
+            "an unverified model must not be demoted; got {:?}",
+            p.experts.iter().map(|a| a.bits).take(4).collect::<Vec<_>>()
+        );
+        assert!((p.speedup() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_protected_expert_keeps_full_precision() {
+        // A cold expert on the protection list must survive, precisely because
+        // frequency would otherwise single it out for the harshest quantisation.
+        let ca = skewed(32);
+        let coldest = (0..32u32)
+            .min_by_key(|&e| ca.freq[e as usize])
+            .expect("non-empty");
+        let mut c = cfg(8);
+        c.require_protection_list = false;
+        c.protected_experts = vec![coldest];
+        // Enough slack that unprotected experts genuinely move, so the test is
+        // about protection rather than about a budget that blocks everything.
+        c.error_budget = ErrorBudget::UniformAt(3.0);
+        let p = allocate(&ca, &Sensitivity::uniform(32), &c);
+        let a = p.experts[coldest as usize];
+        assert!(
+            a.bits >= c.baseline_bits - 1e-9,
+            "protected expert {coldest} was demoted to {} bits",
+            a.bits
+        );
+        // And the allocator still did its job elsewhere.
+        assert!(demoted_any(&p, c.baseline_bits), "nothing else was demoted");
+    }
+
+    #[test]
+    fn the_bit_floor_is_never_breached() {
+        let ca = skewed(32);
+        let mut c = cfg(8);
+        c.require_protection_list = false;
+        c.floor_bits = 4.0;
+        c.error_budget = ErrorBudget::UniformAt(2.0); // permissive, below baseline
+        let p = allocate(&ca, &Sensitivity::uniform(32), &c);
+        let lowest = p
+            .experts
+            .iter()
+            .map(|a| a.bits)
+            .fold(f64::INFINITY, f64::min);
+        assert!(lowest >= 4.0 - 1e-9, "floor breached: {lowest} bits");
     }
 
     #[test]
@@ -613,7 +736,7 @@ mod tests {
     #[test]
     fn cold_experts_are_quantised_at_least_as_hard_as_hot_ones() {
         let ca = skewed(48);
-        let p = allocate(&ca, &Sensitivity::uniform(48), &cfg(12));
+        let p = allocate(&ca, &Sensitivity::uniform(48), &cfg_unguarded(12));
         let hot_mean: f64 = {
             let v: Vec<f64> = p
                 .experts
@@ -641,14 +764,16 @@ mod tests {
     #[test]
     fn allocation_respects_a_tight_precision_ceiling() {
         let ca = skewed(32);
-        let mut c = cfg(8);
-        c.error_budget = ErrorBudget::UniformAt(6.0);
+        let mut c = cfg_unguarded(8);
+        // Must sit *below* the 4.5-bit baseline: the ladder is capped at the
+        // source precision, so a ceiling above it constrains nothing.
+        c.error_budget = ErrorBudget::UniformAt(4.0);
         let sens = Sensitivity::uniform(32);
         let p = allocate(&ca, &sens, &c);
-        let ceiling = uniform_loss(&ca, &sens, 6.0);
+        let ceiling = uniform_loss(&ca, &sens, 4.0);
         assert!(
             p.planned_loss <= ceiling * 1.000_001,
-            "expected loss {} exceeded the uniform-6-bit ceiling {ceiling}",
+            "expected loss {} exceeded the uniform-4-bit ceiling {ceiling}",
             p.planned_loss
         );
     }
@@ -656,9 +781,9 @@ mod tests {
     #[test]
     fn a_tighter_precision_ceiling_yields_less_speedup() {
         let ca = skewed(32);
-        let mut tight = cfg(8);
+        let mut tight = cfg_unguarded(8);
         tight.error_budget = ErrorBudget::UniformAt(6.5);
-        let mut loose = cfg(8);
+        let mut loose = cfg_unguarded(8);
         loose.error_budget = ErrorBudget::UniformAt(2.5);
         let a = allocate(&ca, &Sensitivity::uniform(32), &tight);
         let b = allocate(&ca, &Sensitivity::uniform(32), &loose);
@@ -683,6 +808,7 @@ mod tests {
             resident_budget_bytes: 8 * bytes_at(weights, 16.0),
             baseline_bits: 16.0,
             error_budget: ErrorBudget::UniformAt(4.5),
+            require_protection_list: false,
             ..PlanConfig::default()
         };
         let p = allocate(&ca, &sens, &c);
@@ -716,6 +842,7 @@ mod tests {
             weights_per_expert: weights,
             resident_budget_bytes: 8 * bytes_at(weights, 16.0),
             baseline_bits: 16.0,
+            require_protection_list: false,
             ..PlanConfig::default()
         };
 
@@ -764,6 +891,7 @@ mod tests {
                 resident_budget_bytes: 4 * bytes_at(weights, 16.0),
                 baseline_bits: 16.0,
                 error_budget: ErrorBudget::Absolute(0.015),
+                require_protection_list: false,
                 ..PlanConfig::default()
             },
         );

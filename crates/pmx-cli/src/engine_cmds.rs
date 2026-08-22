@@ -143,7 +143,7 @@ pub fn build_store(
         let mut per_expert_error: Vec<Vec<(f64, f64)>> =
             Vec::with_capacity(layer.n_experts as usize);
         for e in 0..layer.n_experts {
-            let mut rows = vec![(layer.baseline_bits, 0.0f64)];
+            let mut rows = vec![(layer.min_baseline_bits, 0.0f64)];
             // Sample one matrix: the three share a distribution closely enough
             // that measuring all of them triples the cost for no new signal.
             if let Some(name) = layer.expert_tensors.first() {
@@ -176,9 +176,13 @@ pub fn build_store(
         let cfg = PlanConfig {
             weights_per_expert: layer.weights_per_expert,
             resident_budget_bytes: (ram_mib << 20) / m.layers.len().max(1) as u64,
-            baseline_bits: layer.baseline_bits,
+            // The minimum, not the mean: see MoeLayer::min_baseline_bits.
+            baseline_bits: layer.min_baseline_bits,
             tier_cost,
             error_budget: ErrorBudget::UniformAt(error_bits),
+            // Waived only because this build has no outlier-expert analysis to
+            // supply; the warning below says so plainly.
+            require_protection_list: false,
             ..PlanConfig::default()
         };
         let alloc = pmx_plan::allocate(&ca, &sens, &cfg);
@@ -285,6 +289,15 @@ pub fn build_store(
             println!("    {s}");
         }
     }
+    println!(
+        "\nWARNING: no outlier-expert (\"Super Expert\") analysis was supplied, so bits were\n\
+         allocated by access frequency alone. Under 0.5% of experts produce extreme\n\
+         activation outliers that sustain the model's attention sinks; such an expert can be\n\
+         COLD, so frequency singles it out for the harshest quantisation, and its own\n\
+         round-trip error looks entirely ordinary. Pruning one costs 21-27% average accuracy\n\
+         and collapses reasoning models. Detecting them needs one forward pass, which this\n\
+         build cannot do. Treat any store produced here as unvalidated for quality."
+    );
     println!(
         "\nNote: routers are deliberately not requantised and stay in the GGUF.\n\
          Quantisation error in a router perturbs expert selection itself, which would\n\

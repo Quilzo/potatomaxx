@@ -43,8 +43,16 @@ pub struct MoeLayer {
     /// Weights in one expert, summed over expert tensors.
     pub weights_per_expert: u64,
     /// Bits per weight the checkpoint actually stores, averaged over the expert
-    /// tensors. Read from their GGML types rather than assumed.
+    /// tensors. Read from their GGML types rather than assumed. For reporting.
     pub baseline_bits: f64,
+    /// Bits per weight of the *lowest-precision* expert tensor in the layer.
+    ///
+    /// This, not the mean, is what bounds requantisation. A `Q4_K_M` build mixes
+    /// Q4_K and Q6_K expert tensors in the same layer, so the mean sits between
+    /// them — and capping at the mean silently *inflates* the Q4_K tensors to a
+    /// precision the source never had, adding bytes to move for no quality gain.
+    /// Capping at the minimum can only ever reduce.
+    pub min_baseline_bits: f64,
     /// Label of the dominant expert tensor type, for reporting.
     pub baseline_type: &'static str,
 }
@@ -162,6 +170,17 @@ pub fn detect(g: &Gguf) -> MoeModel {
             0.0
         };
 
+        // The lowest precision present bounds requantisation; see the field docs.
+        let min_baseline_bits = experts
+            .iter()
+            .filter_map(|t| t.ggml_type.bits_per_weight().ok())
+            .fold(f64::INFINITY, f64::min);
+        let min_baseline_bits = if min_baseline_bits.is_finite() {
+            min_baseline_bits
+        } else {
+            baseline_bits
+        };
+
         out.layers.push(MoeLayer {
             block,
             n_experts,
@@ -171,6 +190,7 @@ pub fn detect(g: &Gguf) -> MoeModel {
             slice_bytes,
             weights_per_expert,
             baseline_bits,
+            min_baseline_bits,
             baseline_type: biggest.1,
         });
     }

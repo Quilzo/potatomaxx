@@ -200,9 +200,26 @@ weights are 0.31x the source for the same experts
 precision mix: pmxq3=60 pmxq4=588 pmxq8=120
 ```
 
-Hot experts keep 8 bits, cold ones drop to 3. The nearest prior art,
-[APEX-Quant](https://github.com/localai-org/apex-quant), allocates by structural
-role and layer position and uses no runtime traces.
+Hot experts keep more bits, cold ones fewer, and the ladder is capped at the
+source precision so a store can never inflate.
+
+**On novelty, corrected.** Frequency-based per-expert bit allocation is *not* new:
+[MC-MoE](https://arxiv.org/abs/2410.06270) (ICLR 2025) solves it as a linear
+program over per-expert importance, explicitly including activated frequency, and
+[MoQa](https://arxiv.org/html/2606.17118v1) and
+[BitsMoE](https://arxiv.org/html/2606.00079v1) extend it. What is distinct here is
+narrower: the *objective* is bytes moved through a **storage tier** — a disk byte
+costs ~12× a RAM byte on the measured device — rather than accuracy per byte
+*stored*, driven from the operator's own traces rather than a calibration set.
+
+**Safety.** Under 0.5% of experts produce extreme activation outliers that sustain
+the model's attention sinks; pruning one costs 21–27% average accuracy and
+collapses reasoning models ([paper](https://arxiv.org/abs/2507.23279)). Such an
+expert can be *cold*, so frequency would quantise it hardest — and its own
+round-trip error looks entirely ordinary, so the error budget misses it. The
+allocator therefore **refuses to demote anything** unless an outlier-expert list
+is supplied. Detection needs one forward pass, which this build cannot do yet;
+see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 **Routers are never requantised.** Quantisation error in a router perturbs expert
 *selection* — the "expert shift" problem — which would invalidate the very trace

@@ -165,10 +165,18 @@ Nothing is left to fill in.
    a training method. potatomaxx is neither: it is an offline transformation of
    the model file, plus the measurement tooling to decide whether that
    transformation is worth doing on a given machine. Nothing found reorders
-   experts on disk by measured co-activation, and nothing allocates bit width
-   per expert from observed access frequency and storage tier cost. The nearest
-   precision work, APEX-Quant, allocates by structural role and layer position
-   and uses no runtime traces.
+   experts on disk by measured co-activation.
+
+   CORRECTION to an earlier version of this paragraph: we also claimed that
+   nothing allocates bit width per expert from observed access frequency. That
+   was wrong. MC-MoE (ICLR 2025, arXiv:2410.06270) formulates adaptive bit-width
+   allocation as a linear program over per-expert importance including activated
+   frequency; MoQa and BitsMoE extend it. What remains distinct here is narrower
+   and we would rather state it precisely: the objective is bytes MOVED through a
+   storage tier -- a disk byte costing roughly twelve times a RAM byte on our
+   measured device -- rather than accuracy per byte STORED, and it is driven from
+   the operator's own runtime traces rather than a calibration set. That is a
+   difference in objective, not a new idea about frequency.
 
    What motivated writing it: a 7.6 GB laptop with no GPU cannot hold a 30B MoE
    model, and the existing answers either need far more RAM or collapse to
