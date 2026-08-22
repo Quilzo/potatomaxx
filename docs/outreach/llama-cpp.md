@@ -1,4 +1,16 @@
-<!-- GitHub Discussion for ggml-org/llama.cpp — category: Show and tell -->
+<!-- POSTED: https://github.com/ggml-org/llama.cpp/discussions/27534
+     A correction was posted as a comment and noted at the top of the published
+     body: the "fine-grained MoE" claim below is falsified -- no real MoE model
+     has expert slices under 256 KiB. The original text is kept here to match
+     what was published. See docs/REAL-MODEL-RESULTS.md. -->
+
+> **CORRECTION** (published as a comment on the discussion): the claim below that
+> this helps "fine-grained MoE" is **wrong**. Seven real MoE checkpoints were
+> surveyed and none has expert slices under 256 KiB — the smallest, granite, is
+> 288 KiB; DeepSeek-V2-Lite is 1584 KiB. "Fine-grained" refers to expert *count*,
+> not matrix width. Reordering experts is correct and weight-preserving but helps
+> no model that currently exists. What survives: the queue-depth finding (33×),
+> per-expert precision, and the dequantiser validation.
 
 # potatomaxx: reorder MoE experts on disk so llama.cpp reads fewer, larger blocks
 
