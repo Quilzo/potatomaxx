@@ -139,14 +139,12 @@ pub fn pread_flags<F: AsRawFd>(
 /// `FOP_DONTCACHE` rejects the flag on a kernel that otherwise supports it.
 pub fn dontcache_supported<F: AsRawFd>(file: &F) -> bool {
     let mut b = [0u8; 512];
-    match pread_flags(file, &mut b, 0, sys::RWF_DONTCACHE) {
-        Ok(_) => true,
-        Err(KioError::Pread(e)) => {
-            // EINVAL/EOPNOTSUPP mean the flag or the filesystem said no.
-            !matches!(e, 22 | 95)
-        }
-        Err(_) => false,
-    }
+    // Fail closed: only a successful read proves the flag is accepted. An earlier
+    // version treated any errno other than EINVAL/EOPNOTSUPP as success, which
+    // reported ENOSYS — "this platform has no such syscall" — as supported. A
+    // capability probe that guesses "yes" when it does not know is worse than no
+    // probe, because every decision downstream inherits the mistake.
+    pread_flags(file, &mut b, 0, sys::RWF_DONTCACHE).is_ok()
 }
 
 #[cfg(test)]
@@ -165,8 +163,39 @@ mod tests {
         p
     }
 
+    /// Skip a test that needs real syscalls when the target has none.
+    fn linux_only() -> bool {
+        if !crate::sys::SUPPORTED_PLATFORM {
+            eprintln!("not a Linux target; these syscalls are stubbed to ENOSYS");
+            return true;
+        }
+        false
+    }
+
+    #[test]
+    fn unsupported_platforms_fail_closed() {
+        // The contract that keeps a wrong syscall from ever being issued: on a
+        // target without these numbers every wrapper returns ENOSYS and executes
+        // nothing. Gating on architecture alone once produced a macOS build that
+        // called a Linux syscall and died with SIGSYS.
+        if crate::sys::SUPPORTED_PLATFORM {
+            return;
+        }
+        let p = tmp("unsupported.bin", 4096);
+        let f = File::open(&p).unwrap();
+        assert!(residency(&f, 0, 0).is_err());
+        let mut b = [0u8; 64];
+        assert!(pread_flags(&f, &mut b, 0, 0).is_err());
+        assert!(!dontcache_supported(&f));
+        assert!(!crate::uring::available());
+        let _ = std::fs::remove_file(&p);
+    }
+
     #[test]
     fn residency_reports_something_plausible() {
+        if linux_only() {
+            return;
+        }
         let p = tmp("res.bin", 1 << 20);
         let f = File::open(&p).unwrap();
         match residency(&f, 0, 0) {
@@ -192,6 +221,9 @@ mod tests {
 
     #[test]
     fn pread_with_and_without_dontcache_agree() {
+        if linux_only() {
+            return;
+        }
         let p = tmp("dc.bin", 64 << 10);
         let f = File::open(&p).unwrap();
         let mut a = [0u8; 4096];
@@ -210,6 +242,9 @@ mod tests {
 
     #[test]
     fn hugepage_advice_is_accepted_or_cleanly_refused() {
+        if linux_only() {
+            return;
+        }
         // Allocate a 2 MiB-aligned region so the advice has a chance of applying.
         let len = 4 << 20;
         let mut v = vec![0u8; len];
@@ -231,6 +266,9 @@ mod tests {
 
     #[test]
     fn random_advice_is_accepted() {
+        if linux_only() {
+            return;
+        }
         let len = 1 << 20;
         let mut v = vec![0u8; len];
         // SAFETY: as above.

@@ -262,7 +262,7 @@ and its invariants written down:
 |---|---|---|
 | `pmx-probe` | page-aligned buffers for `O_DIRECT` | alignment test |
 | `pmx-kernels` | SIMD intrinsics | scalar path is authoritative; every vector path tested against it |
-| `pmx-kio` | raw syscalls, shared io_uring mappings | batched reads compared byte-for-byte against `std` reads |
+| `pmx-kio` | raw syscalls, shared io_uring mappings | batched reads compared byte-for-byte against `std` reads; the non-Linux path is built and tested too |
 
 ## Layout
 
@@ -299,8 +299,17 @@ sweeping all 65,536 bit patterns); a store index whose writer and reader
 disagreed by four bytes per record; non-deterministic cache eviction from
 `HashMap` iteration order; 25 MiB of alignment padding around 6 MiB of weights;
 a `NaN` sensitivity from one non-finite weight that silently disabled precision
-allocation while reporting success; and a benchmark that measured the page cache
-instead of the device because its corpus fit in RAM.
+allocation while reporting success; a benchmark that measured the page cache
+instead of the device because its corpus fit in RAM; syscall numbers gated on
+architecture but not OS, so a macOS build issued a Linux syscall and died with
+`SIGSYS`; and a capability probe that reported `ENOSYS` as "supported" because it
+treated every unexpected errno as success.
+
+**Platform support.** `pmx-kio` needs Linux — io_uring, `RWF_DONTCACHE` and
+`cachestat(2)` have no portable equivalent. On other targets every syscall
+wrapper fails closed with `ENOSYS` and emits no syscall instruction, so the crate
+still builds and its suite still runs; CI covers Linux and macOS, and the
+non-Linux path is exercised deliberately rather than assumed.
 
 ## Status and how to help
 

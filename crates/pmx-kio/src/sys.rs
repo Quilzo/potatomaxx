@@ -11,8 +11,13 @@
 
 use std::ffi::c_void;
 
-// x86-64 / aarch64 syscall numbers.
-#[cfg(target_arch = "x86_64")]
+// Syscall numbers are per-ABI, so they must be gated on the OS as well as the
+// architecture. Gating on architecture alone once meant a macOS aarch64 build
+// compiled with Linux numbers and actually issued one; the runner reported
+// SIGSYS. Calling a wrong syscall is far worse than reporting a missing feature,
+// so on any non-Linux target every wrapper below fails closed with ENOSYS and no
+// syscall instruction is emitted at all.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub mod nr {
     /// `io_uring_setup(2)` — Linux 5.1.
     pub const IO_URING_SETUP: i64 = 425;
@@ -29,7 +34,7 @@ pub mod nr {
     pub const CLOSE: i64 = 3;
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 pub mod nr {
     pub const IO_URING_SETUP: i64 = 425;
     pub const IO_URING_ENTER: i64 = 426;
@@ -180,112 +185,197 @@ pub struct IoVec {
     pub len: usize,
 }
 
-unsafe extern "C" {
-    fn syscall(num: i64, ...) -> i64;
-}
-
 /// Result of a raw syscall: `Ok(value)` or `Err(errno)`.
 pub type SysResult = Result<i64, i32>;
 
-fn wrap(ret: i64) -> SysResult {
-    if ret < 0 {
-        // The libc wrapper returns -1 and sets errno, but on some paths the
-        // raw value is the negated errno. Handle both.
-        let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        Err(if e != 0 { e } else { (-ret) as i32 })
-    } else {
-        Ok(ret)
+/// `ENOSYS`, returned by every wrapper on targets this crate does not support.
+pub const ENOSYS: i32 = 38;
+
+#[cfg(target_os = "linux")]
+mod imp {
+    use super::*;
+
+    unsafe extern "C" {
+        fn syscall(num: i64, ...) -> i64;
+    }
+
+    fn wrap(ret: i64) -> SysResult {
+        if ret < 0 {
+            // The libc wrapper returns -1 and sets errno, but on some paths the
+            // raw value is the negated errno. Handle both.
+            let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            Err(if e != 0 { e } else { (-ret) as i32 })
+        } else {
+            Ok(ret)
+        }
+    }
+
+    /// # Safety
+    /// `params` must be a valid, writable `IoUringParams`.
+    pub unsafe fn io_uring_setup(entries: u32, params: *mut IoUringParams) -> SysResult {
+        wrap(unsafe { syscall(nr::IO_URING_SETUP, entries, params) })
+    }
+
+    /// # Safety
+    /// `fd` must be a ring fd returned by [`io_uring_setup`].
+    pub unsafe fn io_uring_enter(
+        fd: i32,
+        to_submit: u32,
+        min_complete: u32,
+        flags: u32,
+    ) -> SysResult {
+        wrap(unsafe {
+            syscall(
+                nr::IO_URING_ENTER,
+                fd as i64,
+                to_submit as i64,
+                min_complete as i64,
+                flags as i64,
+                0i64,
+                0i64,
+            )
+        })
+    }
+
+    /// # Safety
+    /// `addr` must be a valid mapping of at least `len` bytes.
+    pub unsafe fn madvise(addr: *mut c_void, len: usize, advice: i32) -> SysResult {
+        wrap(unsafe { syscall(nr::MADVISE, addr, len, advice as i64) })
+    }
+
+    /// # Safety
+    /// `out` must be a valid, writable `Cachestat`.
+    pub unsafe fn cachestat(
+        fd: i32,
+        range: *const CachestatRange,
+        out: *mut Cachestat,
+    ) -> SysResult {
+        wrap(unsafe { syscall(nr::CACHESTAT, fd as i64, range, out, 0i64) })
+    }
+
+    /// # Safety
+    /// `iov` must point to `iovcnt` valid iovecs with writable buffers.
+    pub unsafe fn preadv2(
+        fd: i32,
+        iov: *const IoVec,
+        iovcnt: i32,
+        offset: i64,
+        flags: i32,
+    ) -> SysResult {
+        // The offset is split into low/high words on 32-bit ABIs; on the 64-bit
+        // targets this crate supports it is passed whole, with -1 meaning "use the
+        // file position".
+        wrap(unsafe {
+            syscall(
+                nr::PREADV2,
+                fd as i64,
+                iov,
+                iovcnt as i64,
+                offset,
+                0i64,
+                flags as i64,
+            )
+        })
+    }
+
+    /// # Safety
+    /// Standard `mmap` contract.
+    pub unsafe fn mmap(
+        len: usize,
+        prot: i32,
+        flags: i32,
+        fd: i32,
+        offset: u64,
+    ) -> Result<*mut c_void, i32> {
+        let r = unsafe {
+            syscall(
+                nr::MMAP,
+                std::ptr::null_mut::<c_void>(),
+                len,
+                prot as i64,
+                flags as i64,
+                fd as i64,
+                offset as i64,
+            )
+        };
+        if r == MAP_FAILED as i64 || r < 0 {
+            let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            return Err(if e != 0 { e } else { (-r) as i32 });
+        }
+        Ok(r as *mut c_void)
+    }
+
+    /// # Safety
+    /// `addr`/`len` must describe a mapping created by [`mmap`].
+    pub unsafe fn munmap(addr: *mut c_void, len: usize) -> SysResult {
+        wrap(unsafe { syscall(nr::MUNMAP, addr, len) })
     }
 }
 
-/// # Safety
-/// `params` must be a valid, writable `IoUringParams`.
-pub unsafe fn io_uring_setup(entries: u32, params: *mut IoUringParams) -> SysResult {
-    wrap(unsafe { syscall(nr::IO_URING_SETUP, entries, params) })
-}
+/// Fail-closed stubs for targets without these syscalls.
+///
+/// Every function has the same signature as its Linux counterpart and returns
+/// `ENOSYS` without executing anything. This keeps the crate compiling — and its
+/// tests runnable — on macOS and Windows while guaranteeing no foreign syscall is
+/// ever issued.
+#[cfg(not(target_os = "linux"))]
+mod imp {
+    use super::*;
 
-/// # Safety
-/// `fd` must be a ring fd returned by [`io_uring_setup`].
-pub unsafe fn io_uring_enter(fd: i32, to_submit: u32, min_complete: u32, flags: u32) -> SysResult {
-    wrap(unsafe {
-        syscall(
-            nr::IO_URING_ENTER,
-            fd as i64,
-            to_submit as i64,
-            min_complete as i64,
-            flags as i64,
-            0i64,
-            0i64,
-        )
-    })
-}
-
-/// # Safety
-/// `addr` must be a valid mapping of at least `len` bytes.
-pub unsafe fn madvise(addr: *mut c_void, len: usize, advice: i32) -> SysResult {
-    wrap(unsafe { syscall(nr::MADVISE, addr, len, advice as i64) })
-}
-
-/// # Safety
-/// `out` must be a valid, writable `Cachestat`.
-pub unsafe fn cachestat(fd: i32, range: *const CachestatRange, out: *mut Cachestat) -> SysResult {
-    wrap(unsafe { syscall(nr::CACHESTAT, fd as i64, range, out, 0i64) })
-}
-
-/// # Safety
-/// `iov` must point to `iovcnt` valid iovecs with writable buffers.
-pub unsafe fn preadv2(
-    fd: i32,
-    iov: *const IoVec,
-    iovcnt: i32,
-    offset: i64,
-    flags: i32,
-) -> SysResult {
-    // The offset is split into low/high words on 32-bit ABIs; on the 64-bit
-    // targets this crate supports it is passed whole, with -1 meaning "use the
-    // file position".
-    wrap(unsafe {
-        syscall(
-            nr::PREADV2,
-            fd as i64,
-            iov,
-            iovcnt as i64,
-            offset,
-            0i64,
-            flags as i64,
-        )
-    })
-}
-
-/// # Safety
-/// Standard `mmap` contract.
-pub unsafe fn mmap(
-    len: usize,
-    prot: i32,
-    flags: i32,
-    fd: i32,
-    offset: u64,
-) -> Result<*mut c_void, i32> {
-    let r = unsafe {
-        syscall(
-            nr::MMAP,
-            std::ptr::null_mut::<c_void>(),
-            len,
-            prot as i64,
-            flags as i64,
-            fd as i64,
-            offset as i64,
-        )
-    };
-    if r == MAP_FAILED as i64 || r < 0 {
-        let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        return Err(if e != 0 { e } else { (-r) as i32 });
+    /// # Safety
+    /// Never dereferences its arguments; present for signature compatibility.
+    pub unsafe fn io_uring_setup(_entries: u32, _params: *mut IoUringParams) -> SysResult {
+        Err(ENOSYS)
     }
-    Ok(r as *mut c_void)
+    /// # Safety
+    /// As above.
+    pub unsafe fn io_uring_enter(_fd: i32, _to_submit: u32, _min: u32, _flags: u32) -> SysResult {
+        Err(ENOSYS)
+    }
+    /// # Safety
+    /// As above.
+    pub unsafe fn madvise(_addr: *mut c_void, _len: usize, _advice: i32) -> SysResult {
+        Err(ENOSYS)
+    }
+    /// # Safety
+    /// As above.
+    pub unsafe fn cachestat(
+        _fd: i32,
+        _range: *const CachestatRange,
+        _out: *mut Cachestat,
+    ) -> SysResult {
+        Err(ENOSYS)
+    }
+    /// # Safety
+    /// As above.
+    pub unsafe fn preadv2(
+        _fd: i32,
+        _iov: *const IoVec,
+        _cnt: i32,
+        _off: i64,
+        _flags: i32,
+    ) -> SysResult {
+        Err(ENOSYS)
+    }
+    /// # Safety
+    /// As above.
+    pub unsafe fn mmap(
+        _len: usize,
+        _prot: i32,
+        _flags: i32,
+        _fd: i32,
+        _off: u64,
+    ) -> Result<*mut c_void, i32> {
+        Err(ENOSYS)
+    }
+    /// # Safety
+    /// As above.
+    pub unsafe fn munmap(_addr: *mut c_void, _len: usize) -> SysResult {
+        Err(ENOSYS)
+    }
 }
 
-/// # Safety
-/// `addr`/`len` must describe a mapping created by [`mmap`].
-pub unsafe fn munmap(addr: *mut c_void, len: usize) -> SysResult {
-    wrap(unsafe { syscall(nr::MUNMAP, addr, len) })
-}
+pub use imp::*;
+
+/// Whether this build targets a platform whose syscalls are implemented.
+pub const SUPPORTED_PLATFORM: bool = cfg!(target_os = "linux");

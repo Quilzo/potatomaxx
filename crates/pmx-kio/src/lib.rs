@@ -138,7 +138,18 @@ impl Capabilities {
     ///
     /// `probe_file` is opened read-only and used for the flag and syscall
     /// probes; it must exist. Probing beats parsing `uname`.
+    ///
+    /// On a target whose syscalls are not implemented every field is `false`, and
+    /// nothing is executed to find that out.
     pub fn probe(probe_file: &std::path::Path) -> Capabilities {
+        if !sys::SUPPORTED_PLATFORM {
+            return Capabilities {
+                io_uring: false,
+                dontcache: false,
+                cachestat: false,
+                thp: false,
+            };
+        }
         let f = std::fs::File::open(probe_file).ok();
         let dontcache = f.as_ref().map(hints::dontcache_supported).unwrap_or(false);
         let cachestat = f
@@ -181,6 +192,15 @@ mod tests {
         assert!(s.contains("RWF_DONTCACHE="));
         // Print for the record; different CI kernels will differ.
         eprintln!("capabilities: {s}");
+    }
+
+    #[test]
+    fn a_non_linux_target_reports_no_capabilities() {
+        if sys::SUPPORTED_PLATFORM {
+            return;
+        }
+        let c = Capabilities::probe(std::path::Path::new("/etc/hostname"));
+        assert!(!c.io_uring && !c.dontcache && !c.cachestat && !c.thp);
     }
 
     #[test]
