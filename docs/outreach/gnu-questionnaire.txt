@@ -1,0 +1,201 @@
+To: gnueval@gnu.org
+Subject: potatomaxx 0.1.0 -- offering software to GNU
+
+Send as PLAIN TEXT (no HTML, no attachments except the tarball if needed).
+Produce the tarball with `make dist`.
+
+Before sending, resolve the one bracketed item below.
+
+----------------------------------------------------------------------
+
+* General Information
+
+** Do you agree to follow GNU policies?
+   [CONFIRM BEFORE SENDING — this commits you to GNU maintainership]
+
+** Package name and version:
+   potatomaxx 0.1.0
+
+** Author Full Name <Email>:
+   Rashik Adhikari <rashik.cybersec@gmail.com>
+
+** URL to package home page:
+   https://github.com/Quilzo/potatomaxx
+
+** URL to source tarball:
+   Produced by `make dist` (potatomaxx-0.1.0.tar.gz); also
+   https://github.com/Quilzo/potatomaxx/archive/refs/tags/v0.1.0.tar.gz
+
+** Brief description of the package:
+   potatomaxx makes mixture-of-experts (MoE) language models cheaper to READ,
+   so they can run on machines that cannot hold them in RAM.
+
+   A large MoE checkpoint is streamed from storage while it runs, which makes
+   decoding a storage problem. Storage cares enormously how you ask: on the
+   development machine the same NVMe device delivers 0.099 GB/s at queue depth
+   one and 3.291 GB/s at depth sixteen. potatomaxx reduces the cost of those
+   reads three ways and measures each rather than asserting it: it reorders
+   experts on disk so co-firing experts are adjacent; it stores each expert at
+   its own bit width, chosen from measured quantisation error and observed
+   access frequency; and it predicts which experts a layer will select before
+   its router runs, so reads can be queued.
+
+   The layout pass emits a drop-in GGUF -- same tensor names, same shapes,
+   byte-identical weights -- because permuting the expert axis is a relabelling:
+   permute the router's rows identically and the computed function is unchanged
+   bit for bit. A `verify` subcommand proves this by comparing both files in
+   full, and is strict enough to reject a single flipped byte.
+
+   It is not an inference engine. It has no attention, no KV cache and no
+   sampler. It makes a model cheaper to read; something else runs it.
+
+* Code
+
+** Dependencies:
+   Source language: Rust (2021 edition, MSRV 1.75).
+   Libraries: NONE. The package has zero dependencies beyond the Rust standard
+   library. The GGUF container parser, the command-line parser, the io_uring
+   implementation and the JSON reader are all written within the package. This
+   is deliberate: the program parses model files downloaded from public hubs, so
+   every dependency would widen the surface exposed to untrusted input.
+   Build: cargo (part of the Rust toolchain), plus make and makeinfo.
+   Optional at build time: groff to render the man page.
+
+** Configuration, building, installation:
+   A Makefile follows the GNU Makefile conventions: prefix, exec_prefix, bindir,
+   datarootdir, mandir, infodir, docdir and DESTDIR are all honoured and
+   overridable. Targets: all, build, check, lint, fmt, install, uninstall,
+   installdirs, info, html, clean, distclean, dist. `make check` is the test
+   target, as the standards require. Autoconf is not used, as there is nothing
+   to probe: the toolchain handles platform differences, and kernel facilities
+   are detected at run time rather than at configure time (distributions
+   backport features, and containers misreport them).
+   Verified: `make install DESTDIR=... prefix=/usr` stages correctly and
+   `make uninstall` leaves no files behind.
+
+** Documentation:
+   Texinfo manual at doc/potatomaxx.texi, covering the problem, each
+   subcommand, the correctness argument for repacking, the precision model, the
+   kernel interfaces used, and the measurements which contradicted the design.
+   It is built in continuous integration so it cannot silently rot. A man page
+   is at doc/potatomaxx.1.
+
+** Internationalization:
+   Not yet done; all user-visible strings are English. The output is
+   predominantly numeric tables and measured figures. We would welcome guidance
+   on whether Gettext is expected for a tool of this shape, and are willing to
+   do the work if so.
+
+** Accessibility:
+   Terminal output only. No curses interface, no colour, no ANSI escape
+   sequences, and no information conveyed by colour or position alone. Output is
+   plain text that pipes cleanly to other tools and to screen readers. Broken
+   pipes are handled rather than treated as a crash.
+
+** Security:
+   No cryptography. No network access of any kind. No privileged operations, no
+   setuid, no elevation.
+
+   The security-relevant surface is that the program PARSES ATTACKER-CONTROLLED
+   FILES: a GGUF checkpoint is downloaded from a public hub by someone who did
+   not write it, and its header is read with offset arithmetic. That is the code
+   path which, in other implementations of this format, produced CVE-2026-27940
+   (an integer overflow producing an undersized heap allocation and then a
+   528-byte controlled overflow, itself a bypass of the fix for CVE-2025-53630)
+   and CVE-2026-7482, CVSS 9.1, a heap out-of-bounds read from inflated tensor
+   dimensions that leaked process memory including credentials.
+
+   The measures taken are therefore specific:
+     - Every length, count, offset and dimension read from a file is validated
+       with checked arithmetic against the real file size before it is trusted.
+     - Every component forbids unsafe code except three, each for a reason safe
+       Rust cannot express (SIMD intrinsics; page-aligned buffers for O_DIRECT;
+       raw syscalls and shared io_uring mappings). In each the portable
+       implementation is authoritative and the optimised path is tested against
+       it.
+     - A dedicated hostile-input suite runs on every change: 1400 random inputs,
+       every single-byte mutation of a valid header, truncation at every length,
+       inflated counts and dimensions, unaligned and out-of-range offsets, and
+       invalid UTF-8. The contract is that ANY input yields success or an error,
+       never a panic and never a read outside the file.
+     - Tests run in debug as well as release builds, because debug enables the
+       integer overflow checks release omits, and an overflow on a length taken
+       from an attacker-controlled file is precisely the first CVE class above.
+     - A reported vulnerability process is documented in SECURITY.md.
+
+   The program writes files only where the user names them. It does not modify
+   its input.
+
+* Licensing:
+   The package is GPL-2.0-or-later; every source file carries an SPDX
+   identifier and the full text is in LICENSE. There are no dependencies, so
+   there are no third-party licences to declare.
+
+   On version: GPL-2.0-or-later was chosen so the same source can be used under
+   GPLv3-or-later, satisfying GNU, while remaining usable as v2 by
+   GPL-2.0-only projects such as the Linux kernel, whose interfaces this program
+   uses and whose community it hopes to interoperate with. We are willing to
+   discuss moving to GPL-3.0-or-later if GNU prefers, and would want to
+   understand the consequence for kernel-adjacent reuse first.
+
+   Documentation: the Texinfo manual is under GPL-2.0-or-later rather than the
+   GFDL. We will relicense it to GFDL 1.3-or-later if that is required.
+
+* Similar free software projects:
+
+   Searched the Free Software Directory and the wider free-software ecosystem.
+   Nothing in the Directory addresses this problem. The adjacent free software
+   projects are:
+
+   - llama.cpp (MIT) -- the dominant free local-inference engine. It reads GGUF,
+     and pull request #25294 adds SSD-backed expert streaming. potatomaxx does
+     not compete: its output is a drop-in GGUF, so llama.cpp reads a repacked
+     file unchanged and benefits without modification.
+
+   - Colibri (Apache-2.0) -- a mature C engine that streams MoE experts from
+     disk with router-lookahead prefetch and learned pinning. Again complementary
+     rather than competing: potatomaxx changes the byte layout and precision of
+     the FILE, so an engine consumes the result.
+
+   - MoE-Infinity -- a sparsity-aware expert cache for MoE serving.
+
+   - Academic work on improving locality by changing ROUTING at training time
+     (Oracle-MoE, Sticky Routing, ReMoE). potatomaxx modifies no weights, so it
+     composes with all of them.
+
+   The principal difference is one of layer. Every project above is a runtime or
+   a training method. potatomaxx is neither: it is an offline transformation of
+   the model file, plus the measurement tooling to decide whether that
+   transformation is worth doing on a given machine. Nothing found reorders
+   experts on disk by measured co-activation, and nothing allocates bit width
+   per expert from observed access frequency and storage tier cost. The nearest
+   precision work, APEX-Quant, allocates by structural role and layer position
+   and uses no runtime traces.
+
+   What motivated writing it: a 7.6 GB laptop with no GPU cannot hold a 30B MoE
+   model, and the existing answers either need far more RAM or collapse to
+   fractions of a token per second. Investigating why produced the finding the
+   program is built around -- that queue depth is worth thirty-three times on
+   such a machine, and that almost every engine leaves it on the table.
+
+* Any other information, comments, or questions:
+
+   Two things we would rather state than have discovered.
+
+   FIRST, this program is young. It runs end to end, it has 162 tests covering
+   correctness and hostile input, and continuous integration checks Linux and
+   macOS. But it has been exercised on synthetic checkpoints and one laptop; it
+   has not yet been run against a real multi-gigabyte MoE model. We are offering
+   it for evaluation partly to find out whether GNU considers that premature.
+
+   SECOND, the repository deliberately records the measurements that
+   CONTRADICTED its own design, including the ones that weakened its central
+   claim. Layout, which the program was originally built around, turned out to
+   be the secondary lever. io_uring, which we implemented carefully, lost to a
+   plain thread pool on the test machine. We keep these because a tool whose job
+   is telling you whether an optimisation helps is worth nothing if it cannot be
+   trusted when it says no. If that is not the house style, we would like to
+   know early.
+
+   We would also welcome a view on internationalisation (see above) and on
+   whether the manual should move to the GFDL.

@@ -1,0 +1,73 @@
+To: linux-mm@kvack.org
+Subject: RWF_DONTCACHE and cachestat on a streaming random-read workload
+
+Hi,
+
+A data point on RWF_DONTCACHE from a workload that may be an unusually
+clean case for it, plus a question about whether the page cache can do
+better here in principle.
+
+The workload streams mixture-of-experts model weights from NVMe. Two
+properties matter:
+
+  - The read set per token is chosen by a learned router, so access is
+    random with respect to address. Readahead is a losing bet; every
+    prefetched page is bandwidth spent on something nothing asked for. We
+    set MADV_RANDOM.
+
+  - The file is much larger than RAM (40 GB of weights, 8 GB machine), and
+    most of it is read once. But *some* of it -- a small, strongly skewed
+    hot set -- is read on nearly every token.
+
+So it is neither "stream once, retain nothing" nor "working set fits". It
+is a Zipfian hot set inside a much larger cold body, where the application
+knows the distribution exactly and the kernel cannot infer it.
+
+Measured on 64 KiB random reads over an 18 GiB corpus, 7.6 GB RAM:
+
+  plain buffered, QD16      1.544 GB/s   99% of corpus resident, thrashing
+  RWF_DONTCACHE, QD16       0.795 GB/s   7.4% resident, not thrashing
+
+cachestat() reports nr_recently_evicted > 0 on the plain path, which is
+the kernel telling us plainly that it is caching something that does not
+fit.
+
+The 49% throughput cost is worth paying, and I want to be clear I am not
+reporting it as a regression: what the flag buys is not evicting every
+other process's working set to hold data we will not read again. For a 40
+GB streaming read that is the right trade, and having cachestat()
+available to *show* the residency rather than infer it made the decision
+straightforward. Both are doing their job.
+
+The question. Because the hot set is small and the application knows which
+pages are in it, the ideal behaviour is per-range rather than per-file:
+retain the hot set, drop the cold body. Today the options I can see are
+
+  (a) RWF_DONTCACHE everything and cache the hot set in userspace, which
+      is what we do -- it works, but it means maintaining a second cache
+      next to the page cache and the memory accounting gets awkward;
+
+  (b) plain reads and hope reclaim guesses right, which cachestat says it
+      does not;
+
+  (c) mmap plus MADV_DONTNEED on the cold ranges, which trades the problem
+      for fault overhead on a random access pattern.
+
+Is there a fourth option I am missing? And is per-range retention policy
+something the page cache should express, or is "keep your own cache and
+use DONTCACHE for the rest" the intended answer? I ask partly because the
+research frameworks in this area -- cache_ext, FetchBPF -- argue that
+applications know things the page cache cannot, and expert routing looks
+like an unusually clean example: the distribution is strongly skewed, the
+application knows it exactly, and no sampling could recover it. If a
+concrete workload would be useful to that discussion, this one is small,
+reproducible and GPL-2.0-or-later.
+
+  https://github.com/Quilzo/potatomaxx  (`potatomaxx kio` reproduces the table)
+
+Caveat: measured under WSL2, so the block path is virtualised. The
+residency and thrashing figures come from cachestat() and should be sound
+regardless, but I would not lean on the absolute bandwidths.
+
+Thanks,
+Rashik Adhikari <rashik.cybersec@gmail.com>

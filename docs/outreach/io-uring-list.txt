@@ -1,0 +1,84 @@
+To: io-uring@vger.kernel.org
+Subject: Batched vs sliding-window io_uring reads, and losing to a thread pool
+
+Hi,
+
+I've been measuring random-read paths for a workload that streams
+mixture-of-experts model weights off NVMe, and got two results I can't
+fully explain. I'd rather ask than publish a wrong conclusion, so: am I
+driving the ring wrong, or is this expected?
+
+Workload shape: 64 KiB random reads over an 18 GiB file, buffered (not
+O_DIRECT), on a machine with 7.6 GB RAM so the page cache holds only ~7%
+of the corpus. Access is genuinely random -- offsets come from a router's
+choice, not from address order -- so readahead is not useful. i5-1235U
+laptop.
+
+Numbers, GB/s, 300 ms per cell, cells interleaved to avoid warm-up bias:
+
+    engine                    QD1     QD4     QD8    QD16    QD32
+    pread                   0.099
+    thread pool                     0.537   1.522   3.291
+    io_uring batch-and-drain        0.305   0.550   0.816   1.086
+    io_uring sliding window         1.101   1.362   1.544   1.063
+
+(1) Batch-and-drain is much worse than I expected, and non-monotonic. My
+first implementation submitted a batch of N and waited for all N before
+submitting the next -- so the ring drains to empty and refills each time.
+That peaked at QD8 and then *declined*. Switching to a sliding window
+(replace each completed read immediately, keep N in flight continuously)
+gained +148% at QD8 and +89% at QD16.
+
+I think I understand this one: the drain leaves the device idle in the
+gap, so average depth is well below nominal. Posting it because the batch
+pattern seems like an easy trap -- it reads as "I submitted 32 requests,
+therefore QD32" -- and I'd not seen it spelled out.
+
+(2) The one I don't understand: a plain thread pool still beats io_uring,
+3.291 against 1.544 GB/s at QD16, and io_uring's sliding window turns over
+after QD16 while threads keep scaling. I expected the opposite from the
+syscall accounting alone -- one io_uring_enter() per window refill against
+one preadv2() per read.
+
+My guess is that submission and completion both happening on a single
+thread is the limit, and that 16 threads simply have more submitters into
+the device queue. Before I conclude that, though: is there something
+structurally wrong with the loop? It is roughly
+
+    fill free slots with SQEs, release-store the tail
+    io_uring_enter(to_submit, min_complete = (window full ? 1 : 0))
+    reap CQEs, hand slots straight back
+    repeat
+
+No registered buffers, no SQPOLL, no IOPOLL, IORING_OP_READ with plain
+user buffers. Would you expect registered buffers or SQPOLL to close a 2x
+gap, or is that gap telling me something else?
+
+Caveat I should flag prominently: this is WSL2, so the block path is
+virtualised. That may be the whole answer -- if the host-side virtio queue
+is the bottleneck then more submitting threads would help and fewer
+syscalls would not. If anyone has the equivalent numbers on bare metal
+NVMe I'd be glad to be corrected, and I'll re-run on bare metal before
+treating any of this as settled.
+
+Third result, included because it surprised me and may be useful to
+others: RWF_DONTCACHE measured 49% slower than plain buffered reads at
+QD16 (0.795 vs 1.544 GB/s). That is not a complaint -- it also left 7.4%
+page-cache residency instead of filling RAM, and cachestat() reports the
+plain path thrashing. It seems to me the flag is trading this process's
+throughput for not evicting everyone else's working set, which for a 40 GB
+streaming read is exactly the trade I want. I mention it only because the
+framing I'd absorbed was "faster", and on this workload it isn't -- it's
+*politer*, which is more useful.
+
+The measurement tool is GPL-2.0-or-later, no dependencies, and the
+io_uring bits are a few hundred lines of hand-rolled setup/submit/reap if
+anyone wants to check my work rather than take my word:
+
+  https://github.com/Quilzo/potatomaxx  (crates/pmx-kio, and `potatomaxx kio`)
+
+Happy to re-run with different parameters, or to be told I'm holding it
+wrong.
+
+Thanks,
+Rashik Adhikari <rashik.cybersec@gmail.com>
