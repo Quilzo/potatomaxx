@@ -32,11 +32,28 @@ prefetch *prediction* matters: you can't queue reads you haven't predicted.
 I'm listing these because "here's my cool optimisation" posts are cheap and the
 failures are more useful.
 
-**Reordering experts on disk is the secondary lever, not the primary one.** I
-built the tool around this. Then measured: once you issue a layer's top-k reads
-concurrently, reordering buys 1.1–1.6x, and only when expert slices are in the
-16–128 KiB band. Fine-grained MoE (hundreds of small experts) benefits; Mixtral-
-shaped models with big experts basically don't.
+**Reordering experts on disk helps nothing. I built the tool around it.** First
+measurement demoted it: once you issue a layer's top-k reads concurrently,
+reordering only pays when expert slices are under ~256 KiB, where request size
+still matters. Then I checked whether any real model is under 256 KiB. None is.
+
+One expert contributes `hidden × intermediate` weights to each of its three
+matrices, and each is read as one slice, so `config.json` settles it:
+
+| model | slice @ Q4_K |
+|---|---|
+| granite-3.0-1b-a400m | 288 KiB |
+| Qwen3-30B-A3B | 864 KiB |
+| DeepSeek-V2-Lite | 1584 KiB |
+| Mixtral-8x7B | 32256 KiB |
+
+Zero of seven surveyed are in the band. "Fine-grained" MoE refers to expert
+*count*, not matrix width — DeepSeek-V2-Lite still has a 1408-wide expert
+intermediate. Confirmed empirically: run against real Granite, `analyse` said
+"leave alone" on all 24 layers.
+
+So that whole idea is dead. The repack machinery works — 96 permuted real
+Q4_K/Q6_K tensors verified byte-identical — it just has no problem to solve.
 
 **Fixed 2 MiB "groups" you always read whole are a net loss.** The over-read costs
 more than the coalescing saves once slices are over ~256 KiB.
@@ -72,9 +89,10 @@ someone wants to tell me I'm wrong.
 Three things, and it measures each rather than claiming it:
 
 1. **Repacks a GGUF** so co-firing experts are adjacent. Output is a drop-in
-   GGUF — byte-identical weights, so llama.cpp reads it unchanged. There's a
+   GGUF — byte-identical weights, so llama.cpp reads it unchanged, with a
    `verify` command that proves the weights didn't change and rejects a single
-   flipped byte.
+   flipped byte. Per the above, this currently helps no real model; the value left
+   in it is that it makes *other* file transformations safe to attempt.
 2. **Per-expert precision.** Hot experts at 8 bits, cold ones at 3, chosen from
    *measured* quantisation error per expert plus how often it's actually used.
    3.58x less weight movement at 0.31x the size on my synthetic model. (Can't be
@@ -85,15 +103,17 @@ Three things, and it measures each rather than claiming it:
 
 ## Big honest caveat
 
-**It has never been run against a real MoE checkpoint.** Everything above is
-synthetic models plus real device measurements on one laptop. It needs a routing
-trace (which experts your workload picks) and getting that out of a real engine
-needs a small patch.
+It has now been run against a real MoE checkpoint (Granite 3.0 1b-a400m), which
+is where the layout idea died. But **routing traces are still synthetic** — real
+ones need a router top-k dump from a running engine, which needs a small patch to
+one. So the cache and prefetch numbers are exercised, not validated against a real
+access pattern.
 
-So if you have a Qwen3-30B-A3B or similar and 20 minutes, the `analyse` output
-would be genuinely useful to me — *especially* if it says the gain isn't worth it.
-A tool whose job is telling you whether an optimisation helps is worthless if it
-can't be trusted when it says no.
+What would actually help: run `potatomaxx kio` on **bare metal**. Every I/O number
+here is from WSL2, where the block path is virtualised, and I don't have a
+bare-metal box. The io_uring-vs-threads result in particular is the one I most
+suspect is a virtualisation artefact. It takes about a minute and needs no model,
+no GPU and no config.
 
 ```bash
 cargo build --release
