@@ -102,6 +102,8 @@ This distinction is the point of the project, so it comes before the features.
 | Per-expert precision: size and movement | **Measured** (error), **computed** (movement, from the surface) |
 | Expert-fetch throughput (`bench`) | **Computed** from the measured surface + a replayed trace |
 | Speedup on *your* model | **Unknown until you run `analyse`** — that is what it is for |
+| Repack correctness on a real 822 MB MoE checkpoint | **Measured** — see [docs/REAL-MODEL-RESULTS.md](docs/REAL-MODEL-RESULTS.md) |
+| Q4_K and Q6_K decoders vs F16 ground truth | **Measured** — correlation 0.997 and 0.9998 on real weights |
 | End-to-end generated tokens/sec | **Not measured.** There is no attention, KV cache or sampler here |
 
 `bench` reports a *ceiling* on decode rate, not a decode rate. On a memory-bound
@@ -325,11 +327,27 @@ non-Linux path is exercised deliberately rather than assumed.
 
 ## Status and how to help
 
-Early, and honest about it. Everything above runs, but it has been exercised on
-synthetic checkpoints and one laptop. The most valuable contributions right now:
+Early, and honest about it. It has now been run against a real MoE checkpoint —
+IBM Granite 3.0 1b-a400m, 24 layers × 32 experts — with the repack verified
+byte-identical across 96 permuted real Q4_K/Q6_K tensors, and both dequantisers
+validated against the F16 build of the same model as ground truth. Full results,
+including where the tool declined to claim a win, are in
+**[docs/REAL-MODEL-RESULTS.md](docs/REAL-MODEL-RESULTS.md)**.
 
-- **Run it against a real MoE checkpoint** and report the `analyse` and
-  `bench --compare` output — especially where it says the gain is not worth it.
+On that model `analyse` said *leave alone* on every layer, correctly: its 420 KiB
+expert slices are above the point where request size stops mattering. The
+interesting case remains fine-grained MoE, where slices land in the 16–128 KiB
+band.
+
+Two gaps stand: **routing traces are still synthetic** (real ones need a router
+top-k dump from a running engine), and there is no end-to-end tokens/sec because
+there is no attention, KV cache or sampler here.
+
+The most valuable contributions right now:
+
+- **Run it against a fine-grained MoE** — Qwen3-30B-A3B, DeepSeek-shaped, anything
+  with hundreds of small experts per layer. That is the case the layout argument
+  either survives or does not, and Granite's slices are too large to settle it.
 - **Run `potatomaxx kio` on real hardware.** Every conclusion here follows from
   the shape of one laptop's bandwidth surface. SATA SSDs, eMMC, spinning disks,
   Apple unified memory and bare-metal NVMe will each say something different, and

@@ -9,6 +9,28 @@ They are kept because they are the most useful thing here.
 
 ## Unreleased
 
+### Real-model validation
+
+First run against a real mixture-of-experts checkpoint (IBM Granite 3.0
+1b-a400m, 822 MB, 24 layers x 32 experts, top-8). Full results in
+[docs/REAL-MODEL-RESULTS.md](docs/REAL-MODEL-RESULTS.md).
+
+- Repack verified byte-identical across 96 permuted real Q4_K and Q6_K tensors;
+  782 MiB of weights confirmed unchanged, file size identical. A four-byte
+  corruption was rejected and localised to the exact tensor and slice.
+- New `compare` subcommand validates dequantisers differentially. Against the
+  F16 build of the same model as ground truth: Q4_K correlation 0.997089
+  (7.63% relative error), Q6_K 0.999822 (1.89%) — the ratio their bit-widths
+  predict, from decoders that share no code.
+- **finding** On this model `analyse` reported no useful gain on every layer,
+  correctly: 420 KiB expert slices sit above the point where request size stops
+  mattering. The store also came out 0.99x the source, because granite is
+  already Q4_K. Recorded because a tool that only reports wins cannot be
+  trusted when it reports one.
+- **finding** 2 MiB group alignment cost 106.75 MiB of padding around 690 MiB
+  of weights (~15%) on this model — a straightforward loss here, which is why
+  padding is reported separately from payload rather than folded in.
+
 ## 0.1.0 — 2026-08-22
 
 First public version. Everything runs end to end; nothing has yet been run

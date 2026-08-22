@@ -182,11 +182,35 @@ Before sending, resolve the one bracketed item below.
 
    Two things we would rather state than have discovered.
 
-   FIRST, this program is young. It runs end to end, it has 162 tests covering
-   correctness and hostile input, and continuous integration checks Linux and
-   macOS. But it has been exercised on synthetic checkpoints and one laptop; it
-   has not yet been run against a real multi-gigabyte MoE model. We are offering
-   it for evaluation partly to find out whether GNU considers that premature.
+   FIRST, this program is young -- version 0.1.0, one contributor. It runs end
+   to end, has 162 tests covering correctness and hostile input, and continuous
+   integration checks Linux and macOS.
+
+   It has now been run against a real mixture-of-experts checkpoint
+   (IBM Granite 3.0 1b-a400m, 822 MB, 24 layers x 32 experts, top-8 routing).
+   The results, including the parts where the program declined to claim a
+   benefit, are recorded in docs/REAL-MODEL-RESULTS.md. In summary:
+
+     - Structure detection worked on real tensor naming without changes.
+     - The repacker permuted all 32 experts in all 24 layers -- 96 tensors of
+       real Q4_K and Q6_K data -- and verification confirmed all 782 MiB of
+       weights unchanged, with the file byte-for-byte the same size. A
+       four-byte corruption was rejected and localised to the exact tensor and
+       slice.
+     - Both k-quant dequantisers were validated against the F16 build of the
+       same model as ground truth: correlation 0.997 for Q4_K and 0.9998 for
+       Q6_K, with relative errors of 7.6% and 1.9% -- the ratio their
+       bit-widths predict.
+     - On this model the program reported that reordering would buy nothing,
+       on every layer, because its expert slices are larger than the point
+       where request size stops mattering. That is the correct answer and we
+       would rather it said so than manufacture a number.
+
+   What is still missing: the routing traces used are synthetic. Obtaining real
+   ones requires dumping a router's top-k from a running inference engine, which
+   needs a small patch to one; we have asked upstream. And there is no
+   end-to-end tokens-per-second figure, because this program deliberately
+   contains no attention, KV cache or sampler.
 
    SECOND, the repository deliberately records the measurements that
    CONTRADICTED its own design, including the ones that weakened its central
