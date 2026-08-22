@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn hazards_sort_above_everything_else() {
         // A quality hazard must not be buried under performance advice.
-        let mut v = vec![
+        let mut v = [
             Verdict::Skip,
             Verdict::Do,
             Verdict::Hazard,
