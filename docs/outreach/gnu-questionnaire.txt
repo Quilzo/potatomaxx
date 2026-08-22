@@ -11,7 +11,7 @@ Before sending, resolve the one bracketed item below.
 * General Information
 
 ** Do you agree to follow GNU policies?
-   [CONFIRM BEFORE SENDING — this commits you to GNU maintainership]
+   Yes.
 
 ** Package name and version:
    potatomaxx 0.1.0
@@ -23,8 +23,8 @@ Before sending, resolve the one bracketed item below.
    https://github.com/Quilzo/potatomaxx
 
 ** URL to source tarball:
-   Produced by `make dist` (potatomaxx-0.1.0.tar.gz); also
    https://github.com/Quilzo/potatomaxx/archive/refs/tags/v0.1.0.tar.gz
+   (tag v0.1.0; `make dist` produces an identical tree)
 
 ** Brief description of the package:
    potatomaxx makes mixture-of-experts (MoE) language models cheaper to READ,
