@@ -36,10 +36,15 @@ thing in the repository:
 
 - **Layout** — reorder experts on disk so co-firing experts are adjacent, emitting
   a **drop-in GGUF** with byte-identical weights. The project was built around
-  this. A survey of seven real MoE checkpoints found **none** with expert slices
-  small enough to benefit — the smallest, granite, is 288 KiB against a ~256 KiB
-  threshold; DeepSeek-V2-Lite is 1584 KiB. It is correct, provably
-  weight-preserving, and **helps no model that currently exists.**
+  this, and it does not currently pay: of seven real checkpoints surveyed at Q4_K,
+  **none** is inside the ~256 KiB band where request size still matters.
+
+  But "early" is more accurate than "dead". The closest, granite, misses by only
+  **1.1×** — and lands *inside* the band at Q2_K. And the
+  [fine-grained MoE scaling law](https://arxiv.org/abs/2407.04153) favours more,
+  smaller experts at fixed compute, which pushes future models toward the regime
+  where this pays. `advise` reports the distance and the precision at which a given
+  model would cross over, rather than a yes/no.
 
 That last point is not a disclaimer buried at the bottom. A tool whose job is
 telling you whether an optimisation helps is worth nothing if it cannot be trusted
@@ -154,18 +159,17 @@ plan that looks cheap by RMSE still needs a real eval before production use.
 
 Kept because they are the most useful output, and each is now a regression test.
 
-**Layout does not help any real MoE model.** The original design was built around
-it. Measurement first demoted it to the secondary lever — once a layer's top-k
-reads are issued concurrently, reordering only pays for slices under ~256 KiB —
-and then removed the target entirely. A survey of seven real checkpoints
-(`tools/survey-expert-slices.py`) found **none** with expert slices under 256 KiB:
-the smallest, granite, is 288 KiB, and DeepSeek-V2-Lite is 1584 KiB. Even at Q2_K
-only the smallest model crosses the line.
+**Layout does not pay on current models — but it is early, not dead.** The design
+was built around it. Measurement first demoted it to the secondary lever (once a
+layer's top-k reads go out concurrently, reordering only pays below ~256 KiB), then
+`tools/survey-expert-slices.py` found none of seven real checkpoints inside that
+band at Q4_K.
 
-So reordering experts is correct, provably weight-preserving, and useless on
-every checkpoint that currently exists. Queue depth is worth 33× on the same
-hardware and no layout can influence it. What survives is precision, prefetch,
-cache policy and the I/O findings — all independent of slice size.
+The nuance matters, though: granite misses by **1.1×** and is *inside* the band at
+Q2_K, so aggressively quantised small MoE already qualifies. And the fine-grained
+scaling law pushes toward smaller experts, so the population of qualifying models
+should grow. Meanwhile queue depth is worth 33× and no layout can touch it, so
+that remains the priority.
 
 **Fixed groups read whole are a net loss.** Over-reading a 2 MiB group costs more
 than coalescing saves above ~256 KiB slices. Only coalescing the slices you

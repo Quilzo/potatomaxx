@@ -179,27 +179,47 @@ pub fn run(
         });
     }
 
-    // --- 2. Layout. Settled by slice size alone. ---
-    let plateaued = layer.slice_bytes >= PLATEAU_BYTES;
+    // --- 2. Layout. Settled by slice size, but report the distance. ---
+    // An earlier version answered this yes/no and overstated the result: the
+    // closest real model misses the threshold by only 10%, and moves inside it at
+    // Q2_K. Distance is the useful answer, not a verdict.
+    let ratio = layer.slice_bytes as f64 / PLATEAU_BYTES as f64;
+    // Bits per weight at which this model's slices would enter the band.
+    let weights_per_slice = (layer.slice_bytes as f64 * 8.0) / layer.min_baseline_bits;
+    let enter_bits = (PLATEAU_BYTES as f64 * 8.0) / weights_per_slice;
     f.push(Finding {
-        verdict: if plateaued {
-            Verdict::Skip
-        } else {
+        verdict: if ratio < 1.0 {
             Verdict::Do
+        } else if ratio < 1.5 {
+            Verdict::Marginal
+        } else {
+            Verdict::Skip
         },
         topic: "expert layout",
         evidence: format!(
-            "slices are {} against a ~{} plateau",
+            "slices are {} against a ~{} plateau = {ratio:.2}x outside",
             human(layer.slice_bytes),
             human(PLATEAU_BYTES)
         ),
-        advice: if plateaued {
-            "Do not repack for layout. Reads are already large enough that request size \
-             has stopped mattering, so reordering cannot help. No surveyed real model is \
-             below the plateau."
+        advice: if ratio < 1.0 {
+            "Slices are inside the band where request size still matters, so coalescing \
+             reads can genuinely help. Run `analyse`."
                 .into()
+        } else if ratio < 1.5 {
+            format!(
+                "Just outside. Reordering will buy little at this precision, but these \
+                 slices enter the band below about {enter_bits:.1} bits/weight -- so a more \
+                 aggressively quantised build of the same model may benefit. Worth an \
+                 `analyse` run to check."
+            )
         } else {
-            "Unusually small slices -- reordering may genuinely help here. Run `analyse`.".into()
+            format!(
+                "Reads are already large enough that request size has stopped mattering, so \
+                 reordering cannot help. It would take about {enter_bits:.1} bits/weight to \
+                 enter the band. Note the architectural trend runs the other way: the \
+                 fine-grained MoE scaling law favours more, smaller experts, so this may \
+                 become relevant for future models."
+            )
         },
     });
 
@@ -265,6 +285,28 @@ pub fn run(
             advice: "cannot sample the weight bytes".into(),
         }),
     }
+
+    // --- 4b. Activation sparsity, and why it does not transfer to streaming. ---
+    // Worth stating because it is the most-cited remaining idea and the reason it
+    // fails here is a direct consequence of this project's own measurements.
+    let row_bytes =
+        ((layer.slice_bytes as f64) / (layer.weights_per_expert.max(1) as f64).sqrt()) as u64;
+    f.push(Finding {
+        verdict: Verdict::Skip,
+        topic: "activation sparsity",
+        evidence: format!(
+            "a single expert row is roughly {}; the device needs >= {} per read to be efficient",
+            human(row_bytes.max(1)),
+            human(PLATEAU_BYTES)
+        ),
+        advice: "Contextual sparsity leaves 80-90% of neurons unused per token in ReLU-style \
+                 FFNs, and predictors reach ~93% accuracy. But acting on it requires reading \
+                 individual rows, which are far below the size at which this device delivers \
+                 useful bandwidth -- the measured floor is 0.02 GB/s at 4 KiB. Activation \
+                 sparsity saves *compute* on weights already in RAM; it does not save bytes \
+                 when streaming from storage, because you still pay a read to find out."
+            .into(),
+    });
 
     // --- 5. The quality hazard. Always reported. ---
     f.push(Finding {

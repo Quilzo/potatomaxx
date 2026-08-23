@@ -12,7 +12,7 @@ plausible optimisations as not worth doing, including two of its own:
 
 | idea | verdict | evidence |
 |---|---|---|
-| reorder experts by co-activation | **useless** | no real model has slices under the 256 KiB plateau |
+| reorder experts by co-activation | **no payoff yet** | none of 7 checkpoints inside the 256 KiB band at Q4_K; closest misses by 1.1x |
 | lossless entropy coding of the store | **2%** on k-quants | nibble entropy 3.861 of 4.000 |
 | LFU expert cache | **worse than LRU** | 78.4% vs 80.9% of the offline optimum |
 | repack real Granite | **leave alone**, all 24 layers | 420 KiB slices, above the plateau |
@@ -183,7 +183,37 @@ Verdict: not worth a decode path for a k-quant store. Worth roughly 28% for
 someone streaming an F16 checkpoint, which is a real but narrow case.
 `potatomaxx advise` now measures this per model and says which case you are in.
 
-## 7. Rotation before quantisation, if pushing below 3 bits
+## 7. Route-flip measurement after requantisation
+
+**Status: not started. Needs the harness from item 2. Genuinely differentiated.**
+
+Requantising experts changes the hidden states they produce, which changes routing
+at later layers. That is the "expert shift" problem, and it is measurable.
+
+[Causal Route-Mediated Damage in Quantized MoE](https://arxiv.org/html/2608.11212)
+quantifies it on OLMoE-1B-7B: a **route-mediated fraction of 0.31** — about a third
+of quantisation damage flows through routing changes rather than through arithmetic
+error — reproduced across five runs at 0.313 ± 0.020, with 99.8% of net signed
+damage associating with route-set changes.
+
+Two things follow, and the second is the interesting one.
+
+Route flips are **detectable**: a router-margin statistic reaches AUC 0.772. But
+whether a given flip *helps or hurts* is **not** predictable — every predictor
+class they tried, including cross-layer router vectors over all 16 layers, scored
+AUC 0.490, which is chance.
+
+So the honest feature is a **risk indicator, not a damage predictor**: "your
+requantised store flips N% of routing decisions; roughly a third of quantisation
+damage typically travels this path, and no published method can tell which flips
+are harmful." That is more useful than it sounds — it is a number nobody currently
+reports, it correlates with a real damage channel, and stating its limitation is
+what keeps it honest. `VSRAQ` and `EAQuant` optimise *for* routing consistency;
+none of them tell an operator what their own store did.
+
+Needs a forward pass, so it arrives with item 2.
+
+## 8. Rotation before quantisation, if pushing below 3 bits
 
 **Status: worth considering, not urgent.**
 
@@ -197,7 +227,26 @@ first choice — the point was to test bit *allocation*, not to compete on
 quantisers. But if the cold tier is to go to 2–3 bits on real models, a rotation
 step is the cheapest available quality recovery.
 
-## 8. The things deliberately not on this list
+## 9. Activation sparsity — does not transfer to streaming
+
+**Status: rejected, with a reason derived from this project's own measurements.**
+
+The most-cited remaining idea. Contextual sparsity leaves 80–90% of FFN neurons
+unused per token in ReLU-style networks, and DejaVu-class predictors reach ~93%
+accuracy; PowerInfer exploits it with hot/cold neuron placement.
+
+It does not help here, and the reason is quantitative. Acting on neuron-level
+sparsity means reading individual rows of an expert matrix. For Granite that is
+about **342 bytes**. The measured floor on this device is **0.02 GB/s at 4 KiB**,
+and useful bandwidth begins around 256 KiB — three orders of magnitude larger than
+a row.
+
+The general form is worth stating because it is easy to get wrong: **activation
+sparsity saves compute on weights already in memory. It does not save bytes when
+streaming from storage**, because the read is what you are trying to avoid and you
+must issue it to discover the values. `advise` reports this per model.
+
+## 10. The things deliberately not on this list
 
 - **An inference engine.** Attention, KV cache and a sampler would give
   end-to-end tokens/sec, and would duplicate mature work. See

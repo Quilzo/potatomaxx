@@ -14,9 +14,9 @@ Mixture-of-Experts models, the architecture behind many of the largest open LLMs
 
 My idea: reorder the experts on disk so the ones used together sit next to each other. Fewer, larger reads. Obviously a win.
 
-It isn't. I surveyed seven real MoE checkpoints — Qwen3, DeepSeek, Mixtral, Granite, OLMoE — and **not one** has expert matrices small enough for reordering to matter. The smallest is 288 KB against a ~256 KB threshold. DeepSeek-V2-Lite is 1.5 MB.
+It isn't. I surveyed seven real MoE checkpoints — Qwen3, DeepSeek, Mixtral, Granite, OLMoE — and **not one** has expert matrices small enough for it to pay. The closest misses the threshold by 10%. DeepSeek-V2-Lite misses it by 6x.
 
-Correct, provably safe, and useless on every model that currently exists.
+Correct, provably safe, and currently worth nothing.
 
 But measuring it found what does matter:
 
@@ -48,7 +48,7 @@ I built a tool to run big AI models on cheap hardware. Then I measured it, and m
 
 Mixture-of-Experts models stream from disk because they don't fit in RAM. My plan was to reorder experts on disk so co-used ones sit together — fewer, bigger reads.
 
-I surveyed seven real checkpoints (Qwen3, DeepSeek, Mixtral, Granite). Not one has expert matrices small enough for it to matter.
+I surveyed seven real checkpoints (Qwen3, DeepSeek, Mixtral, Granite). Not one has expert matrices small enough for it to pay — the closest misses by 10%.
 
 What the measurements *did* find:
 
