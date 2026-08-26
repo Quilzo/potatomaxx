@@ -8,3 +8,9 @@ corpus.bin
 potatomaxx-*.tar.gz
 /doc/potatomaxx.info
 /doc/potatomaxx.html
+
+/build.log
+/synth.gguf
+/synth.pmxtrace
+*.gguf
+*.pmxtrace

@@ -69,6 +69,7 @@ COMMANDS
   bench        Replay a trace against a store, measuring the fetch path
   synth        Write a small synthetic MoE checkpoint and trace, for trying the pipeline
   inspect      Report the MoE structure of a GGUF checkpoint
+  fit          Will this model load in this RAM? (+ --recommend-quant, --json)
   compare      Check two quantisations of the same model dequantise to the same weights
   analyse      Score the existing expert order against an optimised one, per layer
   plan         Write a repack plan
@@ -212,6 +213,7 @@ fn main() -> ExitCode {
         "probe" => cmd_probe(&args),
         "synth" => cmd_synth(&args),
         "inspect" => cmd_inspect(&args),
+        "fit" => cmd_fit(&args),
         "analyse" | "analyze" => cmd_analyse(&args),
         "plan" => cmd_plan(&args),
         "pack" => cmd_pack(&args),
@@ -577,6 +579,154 @@ fn cmd_inspect(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+/// Total system RAM in bytes, from `/proc/meminfo` (Linux). None if unreadable.
+fn total_ram_bytes() -> Option<u64> {
+    let s = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in s.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
+/// KV cache + compute-buffer + OS reserve. Weights dominate; the ctx term is a
+/// modest linear allowance. Calibrated so the verdict matches llama.cpp's own fit
+/// check (which aborted an ~11 GiB model on ~7.9 GiB RAM).
+fn fit_reserve(ctx: u64) -> u64 {
+    (400u64 << 20) + ctx * (128 << 10)
+}
+
+/// Usable share of RAM before the runtime refuses to load (leaves headroom for
+/// the OS and allocator).
+fn fit_ceiling(ram_bytes: u64) -> u64 {
+    (ram_bytes as f64 * 0.95) as u64
+}
+
+/// Standard GGUF quant tiers and their approximate effective bits-per-weight
+/// (calibrated to observed k-/i-quant file sizes), ascending.
+const QUANT_TIERS: &[(&str, f64)] = &[
+    ("IQ1_S", 1.70), ("IQ2_XXS", 2.06), ("Q2_K", 2.95), ("IQ3_XXS", 3.05),
+    ("Q3_K_M", 3.55), ("Q4_K_M", 4.87), ("Q5_K_M", 5.65), ("Q6_K", 6.58),
+    ("Q8_0", 8.55), ("F16", 16.0),
+];
+
+/// Approximate on-disk/in-RAM weight bytes for `params` at `bpw` bits/weight.
+fn quant_weight_bytes(params: u64, bpw: f64) -> u64 {
+    (params as f64 * bpw / 8.0) as u64
+}
+
+/// The largest quant tier whose weights fit `budget_weights`, if any.
+fn recommend_quant(params: u64, budget_weights: u64) -> Option<(&'static str, u64)> {
+    let mut best = None;
+    for (name, bpw) in QUANT_TIERS {
+        let sz = quant_weight_bytes(params, *bpw);
+        if sz <= budget_weights {
+            best = Some((*name, sz));
+        }
+    }
+    best
+}
+
+/// `fit`: will this GGUF load in a given RAM budget, and if not, what to target.
+///
+/// The point that costs people hours: a model whose weights exceed RAM does not
+/// merely run slowly — llama.cpp/Ollama pre-check the fit and ABORT the load. mmap
+/// does not lift that on a RAM-bound host (every token of a dense model, and the
+/// full resident set of a MoE, must be backable). So the honest question before a
+/// multi-GB download is "does it fit", not "how fast".
+fn cmd_fit(args: &Args) -> Result<(), String> {
+    let path = args
+        .positional
+        .first()
+        .map(|s| s.as_str())
+        .or_else(|| args.get("model"))
+        .ok_or("usage: potatomaxx fit <model.gguf> [--ram <GiB>] [--ctx <n>] [--recommend-quant] [--json]")?;
+    let g = open_model(path)?;
+    let data = g.data_len();
+    let m = moe::detect(&g);
+
+    let ram_bytes: u64 = if args.get("ram").is_some() {
+        let gib: f64 = args.num("ram", 0.0)?;
+        (gib * (1u64 << 30) as f64) as u64
+    } else {
+        total_ram_bytes().unwrap_or(0)
+    };
+    let ctx: u64 = args.num("ctx", 4096)?;
+
+    let reserve = fit_reserve(ctx);
+    let projected = data + reserve;
+
+    if args.get("json").is_some() {
+        let ceiling = fit_ceiling(ram_bytes);
+        let fits = ram_bytes > 0 && projected <= ceiling;
+        let max_weights = ceiling.saturating_sub(reserve);
+        outln!(
+            "{{\"weights_bytes\":{},\"reserve_bytes\":{},\"projected_bytes\":{},\"ram_bytes\":{},\"ctx\":{},\"fits\":{},\"max_weights_bytes\":{},\"is_moe\":{}}}",
+            data, reserve, projected, ram_bytes, ctx, fits, max_weights, !m.layers.is_empty()
+        );
+        return Ok(());
+    }
+
+    outln!("{path}");
+    outln!("  weights (data)   {}", human(data));
+    outln!("  reserve (kv+ctx) {}  (ctx={ctx})", human(reserve));
+    outln!("  projected use    {}", human(projected));
+    if ram_bytes == 0 {
+        outln!("  system RAM       (unknown — pass --ram <GiB>)");
+        return Ok(());
+    }
+    outln!("  system RAM       {}", human(ram_bytes));
+
+    if args.get("recommend-quant").is_some() || args.get("recommend").is_some() {
+        let params: u64 = g.tensors.iter().map(|t| t.n_elements().unwrap_or(0)).sum();
+        let budget = fit_ceiling(ram_bytes).saturating_sub(reserve);
+        outln!("  parameters       ~{:.1}B", params as f64 / 1e9);
+        outln!("  weight budget    {}\n", human(budget));
+        outln!("  quant      bpw    ~weights   fits");
+        for (name, bpw) in QUANT_TIERS {
+            let sz = quant_weight_bytes(params, *bpw);
+            outln!("  {:<9} {:>4.2}  {:>9}   {}", name, bpw, human(sz),
+                if sz <= budget { "yes" } else { "no" });
+        }
+        match recommend_quant(params, budget) {
+            Some((n, sz)) => outln!(
+                "\nRecommended: {} (~{} weights) — largest quant that fits {} RAM.",
+                n, human(sz), human(ram_bytes)),
+            None => outln!(
+                "\nNo standard quant fits {} RAM — use a smaller model or raise RAM.",
+                human(ram_bytes)),
+        }
+        return Ok(());
+    }
+
+    let ceiling = fit_ceiling(ram_bytes);
+    if projected <= ceiling {
+        outln!("\nFITS — projected {} within {} usable RAM.", human(projected), human(ceiling));
+    } else {
+        let deficit = projected - ceiling;
+        let max_weights = ceiling.saturating_sub(reserve);
+        outln!(
+            "\nDOES NOT FIT — projected {} exceeds usable RAM by {}.",
+            human(projected),
+            human(deficit)
+        );
+        outln!("  target a quant whose weights are <= {} (or raise RAM).", human(max_weights));
+    }
+
+    if !m.layers.is_empty() {
+        outln!(
+            "\nnote: MoE ({} experts/layer). Only ~active experts compute per token, but the",
+            m.layers[0].n_experts
+        );
+        outln!("      runtime still requires the FULL model to fit RAM and aborts otherwise —");
+        outln!("      mmap does not lift that on a RAM-bound host. `build-store` can shrink the");
+        outln!("      resident set, but needs potatomaxx's own runtime to serve inference.");
+    }
+    Ok(())
+}
+
 /// One layer's detected structure paired with what the optimiser made of it.
 type LayerAnalysis = (moe::MoeLayer, pmx_partition::OptimizeReport);
 
@@ -845,4 +995,67 @@ fn cmd_verify(args: &Args) -> Result<(), String> {
     outln!("  {} of weights confirmed unchanged", human(rep.bytes));
     outln!("\nOK — the repacked file holds exactly the original weights.");
     Ok(())
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::{fit_reserve, fit_ceiling, recommend_quant, quant_weight_bytes};
+
+    const GIB: u64 = 1 << 30;
+
+    #[test]
+    fn reserve_grows_with_context() {
+        assert!(fit_reserve(8192) > fit_reserve(1024));
+    }
+
+    #[test]
+    fn eleven_gib_model_does_not_fit_eight_gib_ram() {
+        let data = 10_480 * (1u64 << 20); // ~10.48 GiB weights
+        let projected = data + fit_reserve(4096);
+        let ram = (7.76 * GIB as f64) as u64;
+        assert!(projected > fit_ceiling(ram), "should refuse to fit on 8 GiB");
+    }
+
+    #[test]
+    fn same_model_fits_sixteen_gib() {
+        let data = 10_480 * (1u64 << 20);
+        let projected = data + fit_reserve(4096);
+        assert!(projected <= fit_ceiling(16 * GIB), "should fit on 16 GiB");
+    }
+
+    #[test]
+    fn recommended_max_weights_is_below_ram() {
+        let ram = (7.76 * GIB as f64) as u64;
+        let max_weights = fit_ceiling(ram).saturating_sub(fit_reserve(4096));
+        assert!(max_weights > 5 * GIB && max_weights < 7 * GIB, "≈6.5 GiB budget");
+    }
+
+    #[test]
+    fn recommendation_never_exceeds_budget() {
+        let params: u64 = 8_000_000_000;
+        let budget = 5 * GIB;
+        let (_, sz) = recommend_quant(params, budget).expect("a small quant of an 8B fits 5 GiB");
+        assert!(sz <= budget, "recommended size must fit the budget");
+    }
+
+    #[test]
+    fn more_ram_never_recommends_a_smaller_tier() {
+        let params: u64 = 8_000_000_000;
+        let small = recommend_quant(params, 5 * GIB);
+        let big = recommend_quant(params, 30 * GIB);
+        // both fit for an 8B; the larger budget must not pick fewer bytes
+        assert!(big.unwrap().1 >= small.unwrap().1);
+    }
+
+    #[test]
+    fn budget_below_the_smallest_tier_returns_none() {
+        // 30.5B params can't fit ~2 GiB even at 1-bit
+        assert!(recommend_quant(30_500_000_000, 2 * GIB).is_none());
+    }
+
+    #[test]
+    fn quant_size_scales_with_bpw() {
+        let p = 1_000_000_000;
+        assert!(quant_weight_bytes(p, 4.0) > quant_weight_bytes(p, 2.0));
+    }
 }
