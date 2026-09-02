@@ -100,6 +100,9 @@ OPTIONS
                                  (unrealistic: makes the existing order optimal)
 
   advise   --model <path> [--trace <path>] [--probe <path>] [--cache-mib <n>]
+           [--acceptance <0..1>] draft-token acceptance rate for the speculative
+                                 decoding estimate (default 0.7). Measure it;
+                                 the whole gain scales with it.
            Runs every check the inputs allow and ranks the results: hazards
            first, then what is worth doing, then what measurably is not.
 
@@ -311,6 +314,7 @@ fn cmd_advise(args: &Args) -> Result<(), String> {
         args.get("trace"),
         &surface,
         args.num("cache-mib", 64)?,
+        args.num("acceptance", 0.7)?,
     )
 }
 
@@ -607,9 +611,16 @@ fn fit_ceiling(ram_bytes: u64) -> u64 {
 /// Standard GGUF quant tiers and their approximate effective bits-per-weight
 /// (calibrated to observed k-/i-quant file sizes), ascending.
 const QUANT_TIERS: &[(&str, f64)] = &[
-    ("IQ1_S", 1.70), ("IQ2_XXS", 2.06), ("Q2_K", 2.95), ("IQ3_XXS", 3.05),
-    ("Q3_K_M", 3.55), ("Q4_K_M", 4.87), ("Q5_K_M", 5.65), ("Q6_K", 6.58),
-    ("Q8_0", 8.55), ("F16", 16.0),
+    ("IQ1_S", 1.70),
+    ("IQ2_XXS", 2.06),
+    ("Q2_K", 2.95),
+    ("IQ3_XXS", 3.05),
+    ("Q3_K_M", 3.55),
+    ("Q4_K_M", 4.87),
+    ("Q5_K_M", 5.65),
+    ("Q6_K", 6.58),
+    ("Q8_0", 8.55),
+    ("F16", 16.0),
 ];
 
 /// Approximate on-disk/in-RAM weight bytes for `params` at `bpw` bits/weight.
@@ -687,23 +698,36 @@ fn cmd_fit(args: &Args) -> Result<(), String> {
         outln!("  quant      bpw    ~weights   fits");
         for (name, bpw) in QUANT_TIERS {
             let sz = quant_weight_bytes(params, *bpw);
-            outln!("  {:<9} {:>4.2}  {:>9}   {}", name, bpw, human(sz),
-                if sz <= budget { "yes" } else { "no" });
+            outln!(
+                "  {:<9} {:>4.2}  {:>9}   {}",
+                name,
+                bpw,
+                human(sz),
+                if sz <= budget { "yes" } else { "no" }
+            );
         }
         match recommend_quant(params, budget) {
             Some((n, sz)) => outln!(
                 "\nRecommended: {} (~{} weights) — largest quant that fits {} RAM.",
-                n, human(sz), human(ram_bytes)),
+                n,
+                human(sz),
+                human(ram_bytes)
+            ),
             None => outln!(
                 "\nNo standard quant fits {} RAM — use a smaller model or raise RAM.",
-                human(ram_bytes)),
+                human(ram_bytes)
+            ),
         }
         return Ok(());
     }
 
     let ceiling = fit_ceiling(ram_bytes);
     if projected <= ceiling {
-        outln!("\nFITS — projected {} within {} usable RAM.", human(projected), human(ceiling));
+        outln!(
+            "\nFITS — projected {} within {} usable RAM.",
+            human(projected),
+            human(ceiling)
+        );
     } else {
         let deficit = projected - ceiling;
         let max_weights = ceiling.saturating_sub(reserve);
@@ -712,7 +736,10 @@ fn cmd_fit(args: &Args) -> Result<(), String> {
             human(projected),
             human(deficit)
         );
-        outln!("  target a quant whose weights are <= {} (or raise RAM).", human(max_weights));
+        outln!(
+            "  target a quant whose weights are <= {} (or raise RAM).",
+            human(max_weights)
+        );
     }
 
     if !m.layers.is_empty() {
@@ -999,7 +1026,7 @@ fn cmd_verify(args: &Args) -> Result<(), String> {
 
 #[cfg(test)]
 mod fit_tests {
-    use super::{fit_reserve, fit_ceiling, recommend_quant, quant_weight_bytes};
+    use super::{fit_ceiling, fit_reserve, quant_weight_bytes, recommend_quant};
 
     const GIB: u64 = 1 << 30;
 
@@ -1013,7 +1040,10 @@ mod fit_tests {
         let data = 10_480 * (1u64 << 20); // ~10.48 GiB weights
         let projected = data + fit_reserve(4096);
         let ram = (7.76 * GIB as f64) as u64;
-        assert!(projected > fit_ceiling(ram), "should refuse to fit on 8 GiB");
+        assert!(
+            projected > fit_ceiling(ram),
+            "should refuse to fit on 8 GiB"
+        );
     }
 
     #[test]
@@ -1027,7 +1057,10 @@ mod fit_tests {
     fn recommended_max_weights_is_below_ram() {
         let ram = (7.76 * GIB as f64) as u64;
         let max_weights = fit_ceiling(ram).saturating_sub(fit_reserve(4096));
-        assert!(max_weights > 5 * GIB && max_weights < 7 * GIB, "≈6.5 GiB budget");
+        assert!(
+            max_weights > 5 * GIB && max_weights < 7 * GIB,
+            "≈6.5 GiB budget"
+        );
     }
 
     #[test]

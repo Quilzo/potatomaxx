@@ -183,6 +183,68 @@ Verdict: not worth a decode path for a k-quant store. Worth roughly 28% for
 someone streaming an F16 checkpoint, which is a real but narrow case.
 `potatomaxx advise` now measures this per model and says which case you are in.
 
+## 6b. Speculative decoding — the largest lossless lever, now costed
+
+**Status: estimator implemented in `advise`. The runtime half is not, and belongs
+to an engine.**
+
+This was sketched in the project's first design as a "bandwidth amplifier" and
+never validated. It validates, and it is now published prior art:
+[MoE-SpeQ](https://arxiv.org/pdf/2511.14102) combines speculative decoding with
+proactive expert prefetching and offloading — precisely the combination sketched
+here. [Spec-MoEOff and SP-MoE](https://www.spheron.network/blog/speculative-decoding-moe-models-gpu-cloud/)
+use it specifically to amortise expert-loading latency in memory-constrained
+offloading, and Cohere report that
+[MoE models get *more* from speculative decoding](https://cohere.com/blog/mixture-of-experts-models-get-more-from-speculative-decoding)
+than dense ones.
+
+The mechanism, stated precisely: verifying a block of drafted tokens in one pass
+reads the **union** of the experts those tokens need, not the sum. Adjacent tokens
+reuse experts, so the union grows sublinearly, and bytes per accepted token falls.
+
+That is measurable from a trace **without running a model**, which is why `advise`
+can cost it. `Trace::mean_window_union` computes the union over non-overlapping
+windows directly; expected accepted tokens follow the standard
+`(1 - a^(k+1)) / (1 - a)`. On a synthetic trace with 0.85 persistence:
+
+| acceptance | best depth | experts per accepted token | gain |
+|---|---|---|---|
+| 0.50 | 2 | 7.2 | 1.10x |
+| 0.70 | 2 | 5.8 | 1.38x |
+| 0.90 | 8 | 4.3 | 1.85x |
+
+Two things worth noting. The optimal draft depth **rises with acceptance** — a
+deep draft wastes reads on rejected tokens when acceptance is low — which is
+emergent from the model rather than assumed, and is pinned by a test.
+
+And the gain is smaller than the literature's headline. The 2–4x usually quoted is
+*throughput on GPUs* and includes compute-side wins that do not exist on a
+bandwidth-bound machine. Bytes per accepted token is the honest quantity here, and
+1.1–1.9x is what it gives. It is nonetheless the largest **lossless** lever
+available: every precision lever trades quality, and this one does not.
+
+## 6c. Expert pruning — bigger than quantisation, and riskier
+
+**Status: headroom reported in `advise`. Doing it needs a saliency measure.**
+
+Removing an expert removes its bytes entirely, which strictly beats quantising it.
+The literature is clear that pruning beats *merging*
+([REAP](https://arxiv.org/html/2510.13999)): merging "introduces irreducible
+errors by eliminating the router's ability to maintain fine-grained, independent
+control", while pruning preserves routing independence and wins at high
+compression. Training-free one-shot methods exist — REAP scores by router
+gate-values and expert activation norms, EASY-EP by gate-weighted output norms,
+AIMER is calibration-free.
+
+Note what those signals are **not**: frequency. Published methods deliberately
+score by output magnitude rather than selection count, for the same reason the
+outlier-expert hazard exists — a rarely-selected expert can be load-bearing.
+
+So `advise` reports only the strictly-evidenced part: experts that were **never
+selected** across the trace, as an upper bound on what could be safe to drop for
+that workload, with the caveat attached. Anything beyond that needs activations,
+and arrives with item 2.
+
 ## 7. Route-flip measurement after requantisation
 
 **Status: not started. Needs the harness from item 2. Genuinely differentiated.**

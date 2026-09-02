@@ -433,6 +433,73 @@ impl Trace {
         })
     }
 
+    /// Mean number of *distinct* experts selected across windows of `window`
+    /// consecutive tokens at one layer.
+    ///
+    /// This is the quantity speculative decoding turns into bandwidth. Verifying
+    /// `window` drafted tokens in a single pass reads the *union* of the experts
+    /// those tokens need, not the sum — and because adjacent tokens reuse
+    /// experts, the union grows sublinearly. Dividing it by the tokens actually
+    /// accepted gives bytes per accepted token, which is the figure that matters
+    /// on a bandwidth-bound machine.
+    ///
+    /// Returns `top_k` for `window <= 1`, and never exceeds `n_experts`.
+    pub fn mean_window_union(&self, layer: u32, window: usize) -> f64 {
+        let n = self.n_tokens();
+        if n == 0 {
+            return 0.0;
+        }
+        let window = window.max(1);
+        if window == 1 {
+            return f64::from(self.top_k);
+        }
+        let mut seen = vec![u32::MAX; self.n_experts as usize];
+        let mut total = 0u64;
+        let mut windows = 0u64;
+        // Non-overlapping windows: a speculative pass consumes its whole block
+        // before the next one starts, so overlapping windows would double-count
+        // reuse that never happens.
+        let mut start = 0usize;
+        while start + window <= n {
+            let stamp = windows as u32;
+            let mut distinct = 0u64;
+            for tok in start..start + window {
+                for &e in self.selection(tok, layer) {
+                    if seen[e as usize] != stamp {
+                        seen[e as usize] = stamp;
+                        distinct += 1;
+                    }
+                }
+            }
+            total += distinct;
+            windows += 1;
+            start += window;
+        }
+        if windows == 0 {
+            return f64::from(self.top_k);
+        }
+        (total as f64 / windows as f64).min(f64::from(self.n_experts))
+    }
+
+    /// Experts never selected at `layer` across the whole trace.
+    ///
+    /// Strong workload-specific evidence for pruning: bytes streamed for experts
+    /// this workload never asks for. Weaker evidence than a saliency measure,
+    /// though, and the caveat matters — see the outlier-expert hazard.
+    pub fn never_selected(&self, layer: u32) -> Vec<u32> {
+        let mut hit = vec![false; self.n_experts as usize];
+        for tok in 0..self.n_tokens() {
+            for &e in self.selection(tok, layer) {
+                hit[e as usize] = true;
+            }
+        }
+        hit.iter()
+            .enumerate()
+            .filter(|(_, h)| !**h)
+            .map(|(e, _)| e as u32)
+            .collect()
+    }
+
     /// Apply a pseudorandom relabelling to expert ids.
     ///
     /// [`Trace::synthetic`] plants its clusters as contiguous id ranges, which
@@ -667,6 +734,57 @@ mod tests {
             adj_b < adj_a,
             "scattered adjacency {adj_b} should fall below contiguous {adj_a}"
         );
+    }
+
+    #[test]
+    fn window_union_grows_sublinearly_with_reuse() {
+        // The mechanism speculative decoding exploits: with temporal reuse, the
+        // union over a block of tokens is far smaller than the sum, so one
+        // verification pass reads less per token than one-at-a-time decoding.
+        let cfg = |persistence: f64| SynthConfig {
+            n_layers: 1,
+            n_experts: 64,
+            top_k: 8,
+            tokens: 4000,
+            clusters: 8,
+            locality: 0.9,
+            persistence,
+            layer_coupling: 0.0,
+            seed: 19,
+        };
+        let reuse = Trace::synthetic_cfg(&cfg(0.9));
+        let indep = Trace::synthetic_cfg(&cfg(0.0));
+
+        for w in [2usize, 4, 8] {
+            let u = reuse.mean_window_union(0, w);
+            let sum = 8.0 * w as f64;
+            assert!(u < sum, "window {w}: union {u} should beat the sum {sum}");
+            // Reuse must beat independence at the same window.
+            let ui = indep.mean_window_union(0, w);
+            assert!(u < ui, "window {w}: reuse {u} should beat independent {ui}");
+        }
+        assert_eq!(reuse.mean_window_union(0, 1), 8.0);
+        // Never more experts than exist.
+        assert!(reuse.mean_window_union(0, 1000) <= 64.0);
+    }
+
+    #[test]
+    fn never_selected_finds_unused_experts() {
+        // Only ids 0..8 are ever used, so the rest are prunable for this workload.
+        let t = Trace {
+            n_layers: 1,
+            n_experts: 32,
+            top_k: 4,
+            selections: (0..400u32).map(|i| i % 8).collect(),
+        };
+        t.validate().unwrap();
+        let unused = t.never_selected(0);
+        assert_eq!(unused.len(), 24);
+        assert!(unused.iter().all(|e| *e >= 8));
+
+        // A trace touching everything leaves nothing prunable.
+        let full = Trace::synthetic(1, 16, 8, 2000, 1, 0.0, 3);
+        assert!(full.never_selected(0).is_empty());
     }
 
     #[test]

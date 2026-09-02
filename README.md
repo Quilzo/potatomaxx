@@ -17,7 +17,7 @@ not. Four plausible optimisations have been measured here as not worth doing, tw
 of them this project's own ideas, and every comparable tool implements at least
 one of them unconditionally.
 
-Three levers survive measurement:
+`advise` now runs 13 checks. Three levers survive measurement:
 
 1. **Queue depth** — worth **33×** on the device above, and the reason most
    engines leave performance on the table. `potatomaxx kio` compares `pread`, a
@@ -30,6 +30,10 @@ Three levers survive measurement:
 3. **Prefetch** — predict which experts a layer will select before its router has
    run, because you cannot queue reads you have not predicted. Training-free
    predictors reach 0.739 recall at 4× budget against 0.100 chance.
+4. **Speculative decoding** — the only *lossless* lever. Verifying a drafted block
+   reads the union of its experts rather than the sum, and reuse makes that union
+   sublinear: 1.1–1.9× fewer bytes per accepted token depending on acceptance,
+   which `advise` costs from your trace without running a model.
 
 And one lever that **did not** survive, kept here because it is the most useful
 thing in the repository:

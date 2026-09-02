@@ -115,11 +115,13 @@ fn entropy(bytes: &[u8]) -> f64 {
 }
 
 /// Run every check the supplied inputs allow.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     model: &str,
     trace_path: Option<&str>,
     surface: &Surface,
     cache_mib: u64,
+    alpha: f64,
 ) -> Result<(), String> {
     let g = Gguf::open(model).map_err(|e| format!("reading {model}: {e}"))?;
     let m = moe::detect(&g);
@@ -365,6 +367,82 @@ pub fn run(
 
             let adj = adjacent_overlap(&t);
             let chance = t.top_k as f64 / f64::from(t.n_experts);
+            // --- Speculative decoding, costed from the trace's own reuse. ---
+            // Verifying a block of drafted tokens in one pass reads the *union* of
+            // the experts they need, not the sum. Because adjacent tokens reuse
+            // experts, that union grows sublinearly, so bytes per accepted token
+            // falls. This is measurable from a trace without running a model,
+            // which is the only reason it can be advised on here.
+            let top_k = f64::from(t.top_k);
+            let mut rows: Vec<(usize, f64, f64)> = Vec::new();
+            for depth in [2usize, 4, 8] {
+                let union = t.mean_window_union(0, depth);
+                // Expected accepted tokens per pass under per-token acceptance
+                // `alpha`, plus the always-correct token the target produces.
+                let accepted: f64 = (0..depth).map(|i| alpha.powi(i as i32 + 1)).sum::<f64>() + 1.0;
+                let accepted = accepted.min(depth as f64 + 1.0);
+                rows.push((depth, union / accepted, union / top_k));
+            }
+            let best = rows
+                .iter()
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .copied()
+                .unwrap_or((1, top_k, 1.0));
+            let gain = top_k / best.1.max(1e-9);
+            f.push(Finding {
+                verdict: classify(gain),
+                topic: "speculative decoding",
+                evidence: format!(
+                    "at {alpha:.2} acceptance, depth {} reads {:.1} experts per accepted token \
+                     against {top_k:.0} one-at-a-time = {gain:.2}x fewer",
+                    best.0, best.1
+                ),
+                advice: format!(
+                    "Verifying a drafted block reads the union of its experts, not the sum, and \
+                     reuse makes that union sublinear ({:.1} experts over {} tokens here). It is \
+                     *lossless*, which distinguishes it from every precision lever. Two caveats: \
+                     acceptance must be measured rather than assumed, since the whole gain \
+                     scales with it and the optimal draft depth moves with it too; and this is \
+                     bytes per accepted token only -- the 2-4x figures usually quoted for \
+                     speculative decoding are throughput on GPUs and include compute-side wins \
+                     that do not apply to a bandwidth-bound machine.",
+                    best.2 * top_k,
+                    best.0
+                ),
+            });
+
+            // --- Pruning headroom, workload-specific and strictly evidenced. ---
+            let unused = t.never_selected(0);
+            let frac = unused.len() as f64 / f64::from(t.n_experts);
+            f.push(Finding {
+                verdict: if frac > 0.05 {
+                    Verdict::Marginal
+                } else {
+                    Verdict::Skip
+                },
+                topic: "expert pruning",
+                evidence: format!(
+                    "{} of {} experts were never selected in {} tokens ({:.0}% of streamed bytes)",
+                    unused.len(),
+                    t.n_experts,
+                    t.n_tokens(),
+                    frac * 100.0
+                ),
+                advice: if frac > 0.05 {
+                    "Removing an expert removes its bytes entirely, which beats quantising it. \
+                     But never-selected-in-this-trace is weaker evidence than a saliency \
+                     measure: published methods score experts by gate-weighted output norms, \
+                     not by frequency, precisely because a rarely-used expert can still be \
+                     critical. Treat this as an upper bound on what is safe to drop, and only \
+                     after the outlier-expert check above."
+                        .into()
+                } else {
+                    "Nearly every expert is used by this workload, so there is little to remove \
+                     without a real saliency analysis."
+                        .into()
+                },
+            });
+
             f.push(Finding {
                 verdict: classify(adj / chance.max(1e-9)),
                 topic: "prefetch",
@@ -491,6 +569,45 @@ mod tests {
         assert_eq!(classify(3.00), Verdict::Do);
         assert_eq!(classify(1.05), Verdict::Skip);
         assert_eq!(classify(1.00), Verdict::Skip);
+    }
+
+    #[test]
+    fn optimal_draft_depth_rises_with_acceptance() {
+        // Emergent, not hardcoded: at low acceptance a deep draft wastes reads on
+        // tokens that get rejected, so shallow wins; at high acceptance the union's
+        // sublinearity pays and deep wins. If this inverts, the model is wrong.
+        let t = pmx_trace::Trace::synthetic_cfg(&pmx_trace::SynthConfig {
+            n_layers: 1,
+            n_experts: 64,
+            top_k: 8,
+            tokens: 4000,
+            clusters: 8,
+            locality: 0.9,
+            persistence: 0.85,
+            layer_coupling: 0.0,
+            seed: 23,
+        });
+        let best_depth = |alpha: f64| -> usize {
+            [2usize, 4, 8]
+                .iter()
+                .map(|&d| {
+                    let union = t.mean_window_union(0, d);
+                    let accepted: f64 = (0..d).map(|i| alpha.powi(i as i32 + 1)).sum::<f64>() + 1.0;
+                    (d, union / accepted)
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(d, _)| d)
+                .unwrap()
+        };
+        let (lo, hi) = (best_depth(0.4), best_depth(0.95));
+        assert!(
+            hi >= lo,
+            "optimal depth should not fall as acceptance rises: {lo} -> {hi}"
+        );
+        assert!(
+            hi > lo,
+            "expected a deeper optimum at high acceptance: {lo} -> {hi}"
+        );
     }
 
     #[test]
