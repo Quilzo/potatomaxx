@@ -5,14 +5,15 @@
 //!
 //! Every comparable tool is an *optimiser*: it assumes its transformation helps
 //! and applies it. This one measures first and is willing to say no. That has
-//! turned out to be the more valuable half — four times now, on this project's
-//! own ideas:
+//! turned out to be the more valuable half — five times now, twice on this
+//! project's own ideas and once on a proposal about to ship elsewhere:
 //!
 //! | idea | measured verdict |
 //! |---|---|
 //! | reorder experts on disk by co-activation | no real model has slices small enough; **useless** |
 //! | lossless entropy coding of the store | 2% on k-quants (28% on F16); **not worth it** |
 //! | LFU expert cache | *worse* than LRU on skewed routing |
+//! | SLRU, the policy llama.cpp #20757 wants as its default | a 47-point *regression* on expert streaming |
 //! | repack a real Granite checkpoint | leave it alone, on every layer |
 //!
 //! Each of those would have been weeks of work for nothing. Producing that
@@ -443,6 +444,116 @@ pub fn run(
                 },
             });
 
+            // --- Segmented cache policy. Only answerable from a phased trace. ---
+            if t.prefill_tokens == 0 {
+                f.push(Finding {
+                    verdict: Verdict::Unknown,
+                    topic: "segmented cache",
+                    evidence: format!(
+                        "trace has no prefill/decode boundary ({} tokens, all decode)",
+                        t.n_tokens()
+                    ),
+                    advice: "A segmented policy (SLRU) differs from LRU only across a prefill \
+                             burst: prefill sweeps a wide set of experts once each, and a \
+                             recency-only cache evicts the decode working set to make room for \
+                             it. On an undifferentiated trace the two policies are the same \
+                             measurement, so this cannot be answered. Capture a trace with the \
+                             prompt included, or synthesise one with `synth --prefill N`."
+                        .into(),
+                });
+            } else {
+                let cap = cache_mib * 1024 * 1024;
+                let cost = |bytes: u64| {
+                    let bw = surface.bandwidth_at(layer.slice_bytes.max(4096), 16);
+                    match bw {
+                        Some(r) if r > 0.0 => bytes as f64 / r,
+                        _ => 1.0,
+                    }
+                };
+                // Replay decode only. Prefill's misses are unavoidable and
+                // identical under every policy, so including them dilutes the
+                // comparison with a constant.
+                let decode_rate = |pol: pmx_cache::Policy| -> f64 {
+                    let mut c = pmx_cache::ExpertCache::new(cap, pol);
+                    let b = layer.bytes_per_expert;
+                    // Key by (layer, expert). Expert 3 of layer 0 and expert 3 of
+                    // layer 1 are different tensors; collapsing them onto one id
+                    // shrinks the apparent working set and silently invents hits.
+                    let replay = |c: &mut pmx_cache::ExpertCache, from: usize, to: usize| {
+                        for tok in from..to {
+                            for l in 0..t.n_layers {
+                                for &e in t.selection(tok, l) {
+                                    c.access((l, e), b, cost(b));
+                                }
+                            }
+                        }
+                    };
+                    replay(&mut c, 0, t.prefill_tokens);
+                    let before = c.stats();
+                    replay(&mut c, t.prefill_tokens, t.n_tokens());
+                    let a = c.stats();
+                    let h = a.hits - before.hits;
+                    let m = a.misses - before.misses;
+                    if h + m == 0 {
+                        0.0
+                    } else {
+                        h as f64 / (h + m) as f64
+                    }
+                };
+                let lru = decode_rate(pmx_cache::Policy::Lru);
+                let slru = decode_rate(pmx_cache::Policy::Slru);
+                let gain = slru - lru;
+                f.push(Finding {
+                    verdict: if gain > 0.05 {
+                        Verdict::Do
+                    } else if gain > 0.01 {
+                        Verdict::Marginal
+                    } else {
+                        Verdict::Skip
+                    },
+                    topic: "segmented cache",
+                    evidence: format!(
+                        "decode hit rate {:.1}% under LRU vs {:.1}% under SLRU \
+                         ({} prefill / {} decode tokens)",
+                        lru * 100.0,
+                        slru * 100.0,
+                        t.prefill_tokens,
+                        t.decode_tokens()
+                    ),
+                    advice: if gain > 0.01 {
+                        format!(
+                            "Worth {:.1} points of decode hit rate here. Segmenting protects \
+                             twice-used experts from a one-shot prefill sweep. Note the win is a \
+                             one-off avoided reload of the working set, not an ongoing rate \
+                             gain, so it shrinks as generation lengthens — it pays most on short \
+                             replies to long prompts, and little on long generations.",
+                            gain * 100.0
+                        )
+                    } else if gain < -0.05 {
+                        format!(
+                            "Do not segment here — it costs {:.1} points against plain LRU. \
+                             Promotion needs a second access, and a second access needs the \
+                             expert to survive probation, which is only {:.0}% of capacity. On \
+                             this trace prefill promotes almost everything resident, protection \
+                             fills, and the small probation left over turns over faster than a \
+                             decode expert can be touched twice — so the protected segment \
+                             freezes holding prefill's leftovers. `llama.cpp` #20757 proposes \
+                             SLRU as its default; on this workload that default is a large \
+                             regression, and this is worth telling them.",
+                            -gain * 100.0,
+                            (1.0 - pmx_cache::SLRU_PROTECTED_FRACTION) * 100.0
+                        )
+                    } else {
+                        "Not worth the added state on this workload. Either the working set \
+                         already fits alongside the prefill sweep, or decode runs long enough \
+                         that the one-off reload LRU pays has amortised away. `llama.cpp` \
+                         #20757 proposes SLRU as a default; on this trace that default would \
+                         buy nothing measurable."
+                            .to_string()
+                    },
+                });
+            }
+
             f.push(Finding {
                 verdict: classify(adj / chance.max(1e-9)),
                 topic: "prefetch",
@@ -585,6 +696,8 @@ mod tests {
             locality: 0.9,
             persistence: 0.85,
             layer_coupling: 0.0,
+            prefill_tokens: 0,
+            prefill_locality: 0.05,
             seed: 23,
         });
         let best_depth = |alpha: f64| -> usize {
@@ -660,6 +773,8 @@ mod tests {
             locality: 0.9,
             persistence: 0.0,
             layer_coupling: 0.0,
+            prefill_tokens: 0,
+            prefill_locality: 0.05,
             seed: 5,
         });
         let lots = pmx_trace::Trace::synthetic_cfg(&pmx_trace::SynthConfig {
@@ -671,6 +786,8 @@ mod tests {
             locality: 0.9,
             persistence: 0.95,
             layer_coupling: 0.0,
+            prefill_tokens: 0,
+            prefill_locality: 0.05,
             seed: 5,
         });
         let (a, b) = (adjacent_overlap(&none), adjacent_overlap(&lots));

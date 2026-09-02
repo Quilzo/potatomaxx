@@ -15,6 +15,7 @@ plausible optimisations as not worth doing, including two of its own:
 | reorder experts by co-activation | **no payoff yet** | none of 7 checkpoints inside the 256 KiB band at Q4_K; closest misses by 1.1x |
 | lossless entropy coding of the store | **2%** on k-quants | nibble entropy 3.861 of 4.000 |
 | LFU expert cache | **worse than LRU** | 78.4% vs 80.9% of the offline optimum |
+| SLRU as a default cache policy | **regression on streaming** | 7.7% vs LRU's 55.3% decode hit rate on Granite |
 | repack real Granite | **leave alone**, all 24 layers | 420 KiB slices, above the plateau |
 
 Each of those would have been weeks of work for nothing. `potatomaxx advise`
@@ -85,7 +86,7 @@ Both problems, one tool. This is what to build next.
 
 ## 3. Contribute the cache-policy measurements upstream
 
-**Status: ready to send. Low effort, high value.**
+**Status: ready to send, and now with the SLRU result #20757 most needs.**
 
 `llama.cpp` [issue #20757](https://github.com/ggml-org/llama.cpp/issues/20757)
 requests a two-tier GPU+RAM expert cache with pluggable eviction, and is
@@ -109,10 +110,69 @@ contradicts them:
 - **Measure against the offline optimum**, not against other policies. It is
   computable from a trace and turns "policy A beat policy B" into "policy A
   captured 90.7% of what was available".
+- **SLRU as an unconditional default is a hazard.** This is the new one, and it
+  contradicts the issue's central proposal. See below.
+
+### SLRU has two regimes, and expert streaming can land in the bad one
+
+`Policy::Slru` is implemented as #20757 describes it — enter on probation, promote
+on the second access, drain probation first — with the protected segment capped at
+a tunable share of capacity (default 0.8, the classic value).
+
+It is not uniformly better than LRU. It is not uniformly worse either. Which one
+you get depends on a single condition:
+
+> Promotion requires a second access, and a second access requires the expert to
+> survive probation. Probation is `1 - fraction` of capacity. So segmenting only
+> works when repeat access arrives *faster than probation turns over*.
+
+Measured both sides.
+
+**Where it wins** — a designed workload with a genuinely persistent hot set:
+256 experts, capacity for 40, 70% of decode accesses landing on a hot 64. Decode
+hit rate against the protected share:
+
+| protected share | 0.10 | 0.25 | 0.50 | 0.80 | 0.95 |
+|---|---|---|---|---|---|
+| SLRU | 0.358 | 0.358 | 0.391 | 0.453 | 0.455 |
+| LRU | 0.358 | 0.358 | 0.358 | 0.358 | 0.358 |
+
+Up to **+9.7 points**, monotone in the share, and correctly degenerating to LRU as
+the share goes to zero.
+
+**Where it loses badly** — a real Granite Q4_K checkpoint against a phased
+synthetic trace (4 layers x 64 experts, 200 prefill then 400 decode tokens),
+decode hit rate by cache size:
+
+| cache | 8 MiB | 32 MiB | 64 MiB | 128 MiB | 256 MiB |
+|---|---|---|---|---|---|
+| LRU | 0.0% | **55.3%** | 64.2% | 77.0% | 100% |
+| SLRU | 0.0% | **7.7%** | 47.8% | 76.5% | 100% |
+
+A **47.6 point regression** at 32 MiB. The mechanism is visible in the trace:
+4,800 prefill accesses spread over 256 experts touch each one roughly 19 times, so
+by the end of prefill *everything resident has been promoted*. Protection is full,
+the 20% of capacity left as probation turns over far faster than a decode expert
+can be touched twice, and the protected segment freezes holding prefill's
+leftovers. The gap closes only once capacity is large enough that eviction stops
+mattering at all — which is also where policy choice stops mattering.
+
+The lesson generalises past this one policy: **prefill is not merely a wide sweep,
+it is a wide sweep with enough repetition to defeat a frequency-based admission
+filter.** Any policy that infers "persistent" from "touched more than once" is
+vulnerable to it. That is worth saying upstream before SLRU ships as a default.
+
+`potatomaxx advise` now reports this per model and per device, and names the
+direction — it will tell you not to segment, with the point cost, when that is
+what the measurement says.
 
 ## 4. Model the prefill/decode phase split
 
-**Status: not started. Cheap, and needed for item 3 to be honest.**
+**Status: done.** `SynthConfig` grew `prefill_tokens` and `prefill_locality`;
+`Trace` records the boundary (format v2, and v1 files still read as all-decode);
+`synth --prefill N` emits one. `Trace::decode_selections()` is what policies are
+now judged on, because prefill's misses are unavoidable and identical under every
+policy — including them dilutes the comparison with a constant.
 
 #20757's central observation is that a prefill burst wipes an LRU cache and
 starves the decode that follows. `pmx-trace` cannot express that: its synthetic

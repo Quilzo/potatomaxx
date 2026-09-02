@@ -25,7 +25,11 @@ use std::path::Path;
 /// File magic for the binary trace format.
 pub const MAGIC: [u8; 8] = *b"PMXTRACE";
 /// Current binary format version.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+
+/// The original format, which had no prefill/decode boundary. Still read; such
+/// a file loads with [`Trace::prefill_tokens`] at zero.
+pub const VERSION_V1: u32 = 1;
 
 /// Anything that can go wrong handling a trace.
 #[derive(Debug)]
@@ -102,6 +106,16 @@ pub struct Trace {
     pub top_k: u32,
     /// Flat selection array.
     pub selections: Vec<u32>,
+    /// How many leading tokens belong to a prefill burst rather than to decode.
+    ///
+    /// Zero means the trace is undifferentiated — which is what every synthetic
+    /// trace was before this existed, and the reason segmented cache policies
+    /// could not be told apart from plain LRU. Prefill reads many tokens at
+    /// once and therefore touches a wide set of experts; decode reads one token
+    /// at a time and returns to a narrow set. A recency-only policy evicts the
+    /// narrow set to make room for the wide one, then misses on all of it.
+    /// Expressing the boundary is what makes that failure observable.
+    pub prefill_tokens: usize,
 }
 
 impl Trace {
@@ -112,6 +126,7 @@ impl Trace {
             n_experts,
             top_k,
             selections: Vec::new(),
+            prefill_tokens: 0,
         }
     }
 
@@ -141,6 +156,28 @@ impl Trace {
         (0..self.n_tokens()).map(move |t| self.selection(t, layer))
     }
 
+    /// Tokens that are decode rather than prefill.
+    pub fn decode_tokens(&self) -> usize {
+        self.n_tokens().saturating_sub(self.prefill_tokens)
+    }
+
+    /// Selections belonging to the prefill burst. Empty when there is no phase
+    /// boundary.
+    pub fn prefill_selections(&self) -> &[u32] {
+        let end = (self.prefill_tokens * self.per_token()).min(self.selections.len());
+        &self.selections[..end]
+    }
+
+    /// Selections belonging to decode.
+    ///
+    /// This is the part a cache is judged on. Prefill's misses are unavoidable —
+    /// nothing is resident yet — so counting them dilutes the difference between
+    /// policies with a constant every policy pays.
+    pub fn decode_selections(&self) -> &[u32] {
+        let start = (self.prefill_tokens * self.per_token()).min(self.selections.len());
+        &self.selections[start..]
+    }
+
     /// Check every id is in range and the body is not ragged.
     pub fn validate(&self) -> Result<(), TraceError> {
         if self.n_layers == 0 || self.n_experts == 0 || self.top_k == 0 {
@@ -161,6 +198,13 @@ impl Trace {
                 values: self.selections.len(),
                 per_token: pt,
             });
+        }
+        if self.prefill_tokens > self.selections.len() / pt {
+            return Err(TraceError::BadHeader(format!(
+                "prefill_tokens {} exceeds the {} tokens present",
+                self.prefill_tokens,
+                self.selections.len() / pt
+            )));
         }
         for &e in &self.selections {
             if e >= self.n_experts {
@@ -183,6 +227,7 @@ impl Trace {
         w.write_all(&self.n_experts.to_le_bytes())?;
         w.write_all(&self.top_k.to_le_bytes())?;
         w.write_all(&(self.n_tokens() as u64).to_le_bytes())?;
+        w.write_all(&(self.prefill_tokens as u64).to_le_bytes())?;
         for v in &self.selections {
             w.write_all(&v.to_le_bytes())?;
         }
@@ -204,7 +249,7 @@ impl Trace {
             Ok(u32::from_le_bytes(u32b))
         };
         let version = rd_u32(&mut f)?;
-        if version != VERSION {
+        if version != VERSION && version != VERSION_V1 {
             return Err(TraceError::UnsupportedVersion(version));
         }
         let n_layers = rd_u32(&mut f)?;
@@ -213,6 +258,19 @@ impl Trace {
         let mut u64b = [0u8; 8];
         f.read_exact(&mut u64b)?;
         let n_tokens = u64::from_le_bytes(u64b);
+        // v1 predates the phase boundary. Reading it as all-decode is the
+        // truthful interpretation: those traces really were undifferentiated.
+        let prefill_tokens = if version == VERSION_V1 {
+            0
+        } else {
+            f.read_exact(&mut u64b)?;
+            u64::from_le_bytes(u64b)
+        };
+        if prefill_tokens > n_tokens {
+            return Err(TraceError::BadHeader(format!(
+                "header declares {prefill_tokens} prefill tokens of {n_tokens} total"
+            )));
+        }
 
         let per_token = n_layers as u64 * top_k as u64;
         let total = n_tokens
@@ -237,6 +295,7 @@ impl Trace {
             n_experts,
             top_k,
             selections,
+            prefill_tokens: prefill_tokens as usize,
         };
         t.validate()?;
         Ok(t)
@@ -319,6 +378,7 @@ impl Trace {
             n_experts,
             top_k: top_k as u32,
             selections,
+            prefill_tokens: 0,
         };
         t.validate()?;
         Ok(t)
@@ -341,22 +401,34 @@ impl Trace {
         let clusters = cfg.clusters.max(1).min(n_experts);
         let per_cluster = (n_experts / clusters).max(1);
         let top_k = cfg.top_k as usize;
-        let mut selections = Vec::with_capacity(cfg.tokens * cfg.n_layers as usize * top_k);
+        // Prefill runs ahead of decode, so the trace is longer than `tokens`.
+        let total_tokens = cfg.prefill_tokens + cfg.tokens;
+        let mut selections = Vec::with_capacity(total_tokens * cfg.n_layers as usize * top_k);
         // Cluster carried between tokens, per layer, to create persistence.
         let mut last_cluster = vec![0u32; cfg.n_layers as usize];
         let mut have_last = false;
 
-        for _ in 0..cfg.tokens {
+        for token in 0..total_tokens {
+            // Prefill ingests a whole prompt at once, so it sweeps a wide set of
+            // experts with no reason to revisit any of them. Modelling it means
+            // suppressing exactly the structure decode has: low locality, and no
+            // carry from the previous token or layer.
+            let in_prefill = token < cfg.prefill_tokens;
+            let (locality, persistence, layer_coupling) = if in_prefill {
+                (cfg.prefill_locality, 0.0, 0.0)
+            } else {
+                (cfg.locality, cfg.persistence, cfg.layer_coupling)
+            };
             let mut prev_layer_cluster: Option<u32> = None;
             for slot in last_cluster.iter_mut() {
                 let unit = |v: u64| (v >> 11) as f64 / (1u64 << 53) as f64;
-                let clustered = unit(next()) < cfg.locality;
+                let clustered = unit(next()) < locality;
                 // Three independent sources of structure, resolved in order of
                 // strength: carry the previous layer's cluster (cross-layer
                 // agreement), else the previous token's (temporal persistence),
                 // else draw fresh.
-                let couple = prev_layer_cluster.is_some() && unit(next()) < cfg.layer_coupling;
-                let keep = have_last && unit(next()) < cfg.persistence;
+                let couple = prev_layer_cluster.is_some() && unit(next()) < layer_coupling;
+                let keep = have_last && unit(next()) < persistence;
                 let c = if couple {
                     prev_layer_cluster.expect("checked above")
                 } else if keep {
@@ -396,6 +468,7 @@ impl Trace {
             n_experts,
             top_k: cfg.top_k,
             selections,
+            prefill_tokens: cfg.prefill_tokens,
         }
     }
 
@@ -429,6 +502,8 @@ impl Trace {
             locality,
             persistence: 0.0,
             layer_coupling: 0.0,
+            prefill_tokens: 0,
+            prefill_locality: 0.05,
             seed,
         })
     }
@@ -566,6 +641,19 @@ pub struct SynthConfig {
     /// this at zero, each layer routes independently and no cross-layer
     /// predictor can beat guessing the hottest experts.
     pub layer_coupling: f64,
+    /// Tokens of prefill to emit *before* the `tokens` decode steps.
+    ///
+    /// Zero reproduces the undifferentiated traces this generator produced
+    /// before phases existed. A non-zero burst is what distinguishes a
+    /// segmented cache policy from a recency-only one: without it, SLRU and LRU
+    /// are the same measurement.
+    pub prefill_tokens: usize,
+    /// Locality during the prefill burst.
+    ///
+    /// Deliberately much lower than [`SynthConfig::locality`]. Prefill's defining
+    /// property for a cache is *width* — it touches many experts once each —
+    /// and locality is the knob that controls width.
+    pub prefill_locality: f64,
     /// Seed.
     pub seed: u64,
 }
@@ -581,6 +669,8 @@ impl Default for SynthConfig {
             locality: 0.85,
             persistence: 0.6,
             layer_coupling: 0.45,
+            prefill_tokens: 0,
+            prefill_locality: 0.05,
             seed: 0xC0FFEE,
         }
     }
@@ -751,6 +841,8 @@ mod tests {
             persistence,
             layer_coupling: 0.0,
             seed: 19,
+            prefill_tokens: 0,
+            prefill_locality: 0.05,
         };
         let reuse = Trace::synthetic_cfg(&cfg(0.9));
         let indep = Trace::synthetic_cfg(&cfg(0.0));
@@ -776,6 +868,7 @@ mod tests {
             n_experts: 32,
             top_k: 4,
             selections: (0..400u32).map(|i| i % 8).collect(),
+            prefill_tokens: 0,
         };
         t.validate().unwrap();
         let unused = t.never_selected(0);
@@ -803,6 +896,8 @@ mod tests {
                 persistence,
                 layer_coupling: 0.0,
                 seed: 31,
+                prefill_tokens: 0,
+                prefill_locality: 0.05,
             });
             let mut shared = 0u64;
             for tok in 1..t.n_tokens() {
@@ -836,6 +931,8 @@ mod tests {
                 persistence: 0.0,
                 layer_coupling: coupling,
                 seed: 77,
+                prefill_tokens: 0,
+                prefill_locality: 0.05,
             });
             let mut shared = 0u64;
             let mut n = 0u64;
@@ -917,6 +1014,7 @@ mod tests {
             n_experts: 4,
             top_k: 2,
             selections: vec![0, 9],
+            prefill_tokens: 0,
         };
         assert!(matches!(
             t.validate(),
@@ -934,7 +1032,125 @@ mod tests {
             n_experts: 4,
             top_k: 2,
             selections: vec![0, 1, 2],
+            prefill_tokens: 0,
         };
         assert!(matches!(t.validate(), Err(TraceError::Ragged { .. })));
+    }
+    #[test]
+    fn prefill_covers_more_experts_than_decode() {
+        // The property the whole phase split exists to produce. If prefill were
+        // not wider than decode there would be nothing for a segmented policy
+        // to defend against, and the SLRU measurement would be meaningless.
+        let t = Trace::synthetic_cfg(&SynthConfig {
+            n_layers: 1,
+            n_experts: 64,
+            top_k: 4,
+            tokens: 200,
+            prefill_tokens: 200,
+            clusters: 8,
+            locality: 0.9,
+            persistence: 0.85,
+            ..Default::default()
+        });
+        // Total coverage is the wrong measure and saturates: over 800 draws both
+        // phases eventually touch all 64 experts. What a cache actually feels is
+        // the *working-set width* -- distinct experts within a short window --
+        // so measure that, over non-overlapping windows.
+        let width = |sel: &[u32], window: usize| -> f64 {
+            let per = window * t.per_token();
+            let windows = sel.len() / per;
+            assert!(windows > 0, "window longer than the phase");
+            let mut total = 0usize;
+            for w in 0..windows {
+                let mut seen = vec![false; t.n_experts as usize];
+                for &e in &sel[w * per..(w + 1) * per] {
+                    seen[e as usize] = true;
+                }
+                total += seen.iter().filter(|s| **s).count();
+            }
+            total as f64 / windows as f64
+        };
+        let pre = width(t.prefill_selections(), 8);
+        let dec = width(t.decode_selections(), 8);
+        assert_eq!(t.prefill_tokens, 200);
+        assert_eq!(t.decode_tokens(), 200);
+        assert!(
+            pre > dec * 1.5,
+            "prefill width {pre:.1} should clearly exceed decode width {dec:.1}"
+        );
+    }
+
+    #[test]
+    fn phases_partition_the_selections_exactly() {
+        let t = Trace::synthetic_cfg(&SynthConfig {
+            n_layers: 3,
+            n_experts: 32,
+            top_k: 4,
+            tokens: 50,
+            prefill_tokens: 20,
+            ..Default::default()
+        });
+        assert_eq!(
+            t.prefill_selections().len() + t.decode_selections().len(),
+            t.selections.len()
+        );
+        assert_eq!(t.n_tokens(), 70);
+        assert_eq!(t.prefill_selections().len(), 20 * t.per_token());
+    }
+
+    #[test]
+    fn the_phase_boundary_survives_a_round_trip() {
+        let dir = std::env::temp_dir().join("pmx-trace-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("phased.pmxtrace");
+        let t = Trace::synthetic_cfg(&SynthConfig {
+            n_layers: 2,
+            n_experts: 16,
+            top_k: 2,
+            tokens: 30,
+            prefill_tokens: 11,
+            ..Default::default()
+        });
+        t.write(&p).unwrap();
+        let back = Trace::read(&p).unwrap();
+        assert_eq!(back.prefill_tokens, 11);
+        assert_eq!(back.selections, t.selections);
+    }
+
+    #[test]
+    fn version_1_traces_still_read_as_all_decode() {
+        // Traces written before phases existed must keep working, and the honest
+        // reading of one is that it is undifferentiated -- not that it is all
+        // prefill. Getting this backwards would silently flatter SLRU.
+        let dir = std::env::temp_dir().join("pmx-trace-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("v1.pmxtrace");
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&MAGIC);
+        buf.extend_from_slice(&VERSION_V1.to_le_bytes());
+        buf.extend_from_slice(&1u32.to_le_bytes()); // n_layers
+        buf.extend_from_slice(&8u32.to_le_bytes()); // n_experts
+        buf.extend_from_slice(&2u32.to_le_bytes()); // top_k
+        buf.extend_from_slice(&3u64.to_le_bytes()); // n_tokens
+        for v in [0u32, 1, 2, 3, 4, 5] {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        std::fs::write(&p, &buf).unwrap();
+        let t = Trace::read(&p).unwrap();
+        assert_eq!(t.prefill_tokens, 0);
+        assert_eq!(t.n_tokens(), 3);
+        assert_eq!(t.decode_selections().len(), 6);
+    }
+
+    #[test]
+    fn a_prefill_boundary_past_the_end_is_rejected() {
+        let t = Trace {
+            n_layers: 1,
+            n_experts: 8,
+            top_k: 2,
+            selections: vec![0, 1, 2, 3],
+            prefill_tokens: 99,
+        };
+        assert!(matches!(t.validate(), Err(TraceError::BadHeader(_))));
     }
 }

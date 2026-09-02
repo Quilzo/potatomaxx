@@ -113,6 +113,31 @@ jobs:
               --probe surf.json --cache-mib 1 --compare
           # A store must be smaller than the F16 experts it came from.
           echo "OK: streaming path ran end to end"
+      - name: phased trace — the segmented-cache verdict must be reachable
+        run: |
+          set -euo pipefail
+          BIN=./target/release/potatomaxx
+          cd "$(mktemp -d)"
+          "$OLDPWD/$BIN" probe --corpus-mib 256 --out surf.json
+          # Without a prefill boundary SLRU and LRU are the same measurement, so
+          # the advisor must say UNKNOWN rather than invent a verdict.
+          "$OLDPWD/$BIN" synth --experts 64 --layers 3 --tokens 2000 --top-k 6 \
+              --out flat.gguf --trace flat.pmxtrace
+          "$OLDPWD/$BIN" advise --model flat.gguf --trace flat.pmxtrace \
+              --surface surf.json --cache-mib 8 > flat.txt
+          grep -q "segmented cache" flat.txt || { echo "FAIL: no segmented-cache check"; exit 1; }
+          grep -A1 "segmented cache" flat.txt | grep -q "no prefill/decode boundary" \
+              || { echo "FAIL: expected UNKNOWN on an unphased trace"; cat flat.txt; exit 1; }
+          # With a boundary it must produce an actual measurement instead.
+          "$OLDPWD/$BIN" synth --experts 64 --layers 3 --tokens 2000 --top-k 6 \
+              --prefill 500 --out ph.gguf --trace ph.pmxtrace
+          "$OLDPWD/$BIN" advise --model ph.gguf --trace ph.pmxtrace \
+              --surface surf.json --cache-mib 8 > ph.txt
+          grep -A1 "segmented cache" ph.txt | grep -q "under LRU vs" \
+              || { echo "FAIL: expected a measured LRU/SLRU comparison"; cat ph.txt; exit 1; }
+          # And a v1 trace, written before phases existed, must still load.
+          "$OLDPWD/$BIN" inspect ph.gguf > /dev/null
+          echo "OK: phased trace drives the segmented-cache verdict"
       - name: verification must reject a tampered file
         run: |
           set -euo pipefail

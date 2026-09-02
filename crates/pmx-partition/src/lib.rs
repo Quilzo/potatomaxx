@@ -686,6 +686,7 @@ mod tests {
             n_experts: 16,
             top_k: 4,
             selections: vec![0, 1, 2, 3],
+            prefill_tokens: 0,
         };
         let edges = Edges::from_trace(&t, 0);
         let adjacent = evaluate(&edges, &Layout::identity(16), &cm);
@@ -712,6 +713,7 @@ mod tests {
             n_experts: 8,
             top_k: 2,
             selections: vec![0, 2],
+            prefill_tokens: 0,
         };
         let edges = Edges::from_trace(&t, 0);
         let l = Layout::identity(8);
@@ -741,6 +743,7 @@ mod tests {
             n_experts: n,
             top_k: 4,
             selections: base.selections.iter().map(|&e| stride(e)).collect(),
+            prefill_tokens: 0,
         };
         let edges = Edges::from_trace(&shuffled, 0);
         let ca = CoActivation::from_trace(&shuffled, 0);

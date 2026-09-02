@@ -345,6 +345,8 @@ mod tests {
             locality: 0.9,
             persistence: 0.7,
             layer_coupling: 0.45,
+            prefill_tokens: 0,
+            prefill_locality: 0.05,
             seed: 3,
         });
         t.scatter_labels(0xBEEF);

@@ -490,6 +490,8 @@ fn cmd_synth(args: &Args) -> Result<(), String> {
 
     let persistence: f64 = args.num("persistence", 0.7)?;
     let layer_coupling: f64 = args.num("layer-coupling", 0.45)?;
+    let prefill_tokens: usize = args.num("prefill", 0)?;
+    let prefill_locality: f64 = args.num("prefill-locality", 0.05)?;
     let mut t = Trace::synthetic_cfg(&pmx_trace::SynthConfig {
         n_layers: layers,
         n_experts: experts,
@@ -499,6 +501,8 @@ fn cmd_synth(args: &Args) -> Result<(), String> {
         locality,
         persistence,
         layer_coupling,
+        prefill_tokens,
+        prefill_locality,
         seed: 0xC0FFEE,
     });
     // Planted clusters land on contiguous ids, which would make the checkpoint's

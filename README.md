@@ -185,6 +185,19 @@ offline optimum against LRU's 80.9% on skewed routing. Its key contains
 is constant and it collapses to LFU — which is *worse* than LRU. Cost-awareness
 pays across storage tiers, not within one.
 
+**A segmented cache is not a safe default.** SLRU — probation, promote on the
+second access, drain probation first — is what `llama.cpp` issue #20757 proposes
+adopting as its default policy. It has two regimes. On a designed workload with a
+genuinely persistent hot set it is worth up to **+9.7 points** of decode hit rate
+over LRU. On a real Granite Q4_K checkpoint replayed against a prefill-then-decode
+trace at 32 MiB of cache it is a **47.6 point regression** — 7.7% against LRU's
+55.3%. Promotion needs a second access, a second access needs the expert to
+survive probation, and prefill touches each expert enough times to promote
+*everything* resident; protection fills with prefill's leftovers and the sliver of
+probation left over thrashes. Any policy inferring "persistent" from "touched more
+than once" is exposed to this. `advise` measures which regime you are in and names
+the direction.
+
 **Prefetching is not free.** Every prediction is a real read, charged whether the
 router wants it or not. Throughput peaks near `top_k` and then falls while recall
 keeps climbing. In one configuration plain on-demand LRU beat every prefetch
@@ -361,7 +374,7 @@ and its invariants written down:
 | `pmx-partition` | expert-order optimisation against the measured surface | forbidden |
 | `pmx-plan` | residency and bit allocation by frequency × tier cost | forbidden |
 | `pmx-store` | native store: per-expert precision, contiguous experts | forbidden |
-| `pmx-cache` | expert residency cache: LRU, LFU, GDSF | forbidden |
+| `pmx-cache` | expert residency cache: LRU, LFU, GDSF, SLRU | forbidden |
 | `pmx-predict` | router lookahead, training-free | forbidden |
 | `pmx-runtime` | replay harness tying prefetch, cache and precision together | forbidden |
 | `pmx-cli` | the `potatomaxx` binary | forbidden |

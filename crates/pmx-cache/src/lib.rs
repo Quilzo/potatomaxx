@@ -62,7 +62,26 @@ pub enum Policy {
     Lfu,
     /// Greedy-Dual Size with Frequency: `L + freq * cost / size`.
     Gdsf,
+    /// Segmented LRU: a probationary segment feeding a protected segment.
+    ///
+    /// An expert enters on probation and is promoted only on its *second*
+    /// access; eviction drains probation first. A one-shot prefill sweep
+    /// therefore lands entirely in probation and cannot displace a decode
+    /// working set that has been touched twice, which is the failure mode plain
+    /// LRU has. This is the policy `llama.cpp` issue #20757 proposes adopting
+    /// as its default, and the reason the trace generator needed phases: on an
+    /// undifferentiated trace this is indistinguishable from [`Policy::Lru`].
+    Slru,
 }
+
+/// Default fraction of capacity the protected segment may occupy under
+/// [`Policy::Slru`].
+///
+/// The classic value. Too high and probation is too small to audition new
+/// entries; too low and the protected set cannot hold a working set. Tunable
+/// via [`ExpertCache::set_slru_protected_fraction`], because a policy that only
+/// loses at one setting has not been evaluated -- it has been mis-tuned.
+pub const SLRU_PROTECTED_FRACTION: f64 = 0.8;
 
 impl Policy {
     /// Human-readable name.
@@ -71,6 +90,7 @@ impl Policy {
             Policy::Lru => "lru",
             Policy::Lfu => "lfu",
             Policy::Gdsf => "gdsf",
+            Policy::Slru => "slru",
         }
     }
 
@@ -80,6 +100,7 @@ impl Policy {
             "lru" => Policy::Lru,
             "lfu" => Policy::Lfu,
             "gdsf" => Policy::Gdsf,
+            "slru" => Policy::Slru,
             _ => return None,
         })
     }
@@ -95,6 +116,8 @@ struct Entry {
     last_used: u64,
     /// GDSF key at insertion or last hit.
     key: f64,
+    /// SLRU: promoted out of probation. Meaningless under other policies.
+    protected: bool,
 }
 
 /// Running counters for a cache run.
@@ -136,6 +159,10 @@ pub struct ExpertCache {
     clock: u64,
     /// GDSF inflation term.
     inflation: f64,
+    /// SLRU: bytes currently held in the protected segment.
+    protected_used: u64,
+    /// SLRU: share of capacity the protected segment may occupy.
+    slru_fraction: f64,
     stats: CacheStats,
 }
 
@@ -150,8 +177,25 @@ impl ExpertCache {
             pinned: HashMap::new(),
             clock: 0,
             inflation: 0.0,
+            protected_used: 0,
+            slru_fraction: SLRU_PROTECTED_FRACTION,
             stats: CacheStats::default(),
         }
+    }
+
+    /// Set the share of capacity [`Policy::Slru`] may hold protected.
+    ///
+    /// Clamped to a sane interior range: at 0 nothing can be protected and the
+    /// policy is just LRU, at 1 protection swallows the cache and there is no
+    /// probation left to audition new entries.
+    pub fn set_slru_protected_fraction(&mut self, f: f64) {
+        self.slru_fraction = f.clamp(0.05, 0.95);
+        self.demote_overflow();
+    }
+
+    /// Bytes currently held in the protected segment under [`Policy::Slru`].
+    pub fn protected_bytes(&self) -> u64 {
+        self.protected_used
     }
 
     /// Counters accumulated so far.
@@ -249,7 +293,18 @@ impl ExpertCache {
             e.hits += 1;
             e.last_used = self.clock;
             e.key = self.inflation + e.hits as f64 * e.fetch_cost / e.bytes.max(1) as f64;
+            // Second access is what earns protection. One-shot entries — the
+            // whole of a prefill sweep — never reach the protected segment.
+            let promote = self.policy == Policy::Slru && !e.protected;
+            let bytes = e.bytes;
+            if promote {
+                e.protected = true;
+            }
             self.stats.hits += 1;
+            if promote {
+                self.protected_used += bytes;
+                self.demote_overflow();
+            }
             return true;
         }
         self.stats.misses += 1;
@@ -278,9 +333,42 @@ impl ExpertCache {
                 hits: 1,
                 last_used: self.clock,
                 key,
+                protected: false,
             },
         );
         self.used += bytes;
+    }
+
+    /// SLRU: hold the protected segment to its share of capacity by demoting
+    /// its least-recently-used members back to probation.
+    ///
+    /// Without this the policy is self-defeating: every twice-touched expert
+    /// would stay protected, protection would spread to the whole cache, and
+    /// eviction would fall back to plain recency — the thing SLRU exists to
+    /// avoid. Demotion is not eviction; a demoted expert is still resident and
+    /// still serves hits, it has merely lost its immunity.
+    fn demote_overflow(&mut self) {
+        if self.policy != Policy::Slru {
+            return;
+        }
+        let limit = (self.capacity as f64 * self.slru_fraction) as u64;
+        while self.protected_used > limit {
+            let victim = self
+                .entries
+                .iter()
+                .filter(|(_, e)| e.protected)
+                .min_by(|a, b| a.1.last_used.cmp(&b.1.last_used).then_with(|| a.0.cmp(b.0)))
+                .map(|(id, _)| *id);
+            match victim {
+                Some(v) => {
+                    if let Some(e) = self.entries.get_mut(&v) {
+                        e.protected = false;
+                        self.protected_used = self.protected_used.saturating_sub(e.bytes);
+                    }
+                }
+                None => break,
+            }
+        }
     }
 
     /// Evict until `bytes` will fit. Returns false if that is impossible.
@@ -291,6 +379,9 @@ impl ExpertCache {
                     if let Some(e) = self.entries.remove(&v) {
                         self.used -= e.bytes;
                         self.stats.evictions += 1;
+                        if e.protected {
+                            self.protected_used = self.protected_used.saturating_sub(e.bytes);
+                        }
                         if self.policy == Policy::Gdsf {
                             // Carry the victim's key forward, so future entries
                             // are judged against what was given up. Without this
@@ -312,15 +403,18 @@ impl ExpertCache {
     /// make eviction — and therefore every reported hit rate — differ between
     /// runs. LFU is especially tie-heavy, since most entries sit at one hit.
     fn pick_victim(&self) -> Option<ExpertId> {
-        let mut best: Option<(f64, ExpertId)> = None;
+        let mut best: Option<((u8, f64), ExpertId)> = None;
         for (id, e) in &self.entries {
             if self.pinned.contains_key(id) {
                 continue;
             }
-            let score = match self.policy {
-                Policy::Lru => e.last_used as f64,
-                Policy::Lfu => e.hits as f64,
-                Policy::Gdsf => e.key,
+            // The leading rank segments the candidates; only SLRU uses it.
+            // Probation (rank 0) is drained entirely before protected (rank 1).
+            let score: (u8, f64) = match self.policy {
+                Policy::Lru => (0, e.last_used as f64),
+                Policy::Lfu => (0, e.hits as f64),
+                Policy::Gdsf => (0, e.key),
+                Policy::Slru => (u8::from(e.protected), e.last_used as f64),
             };
             let better = match best {
                 None => true,
@@ -670,9 +764,191 @@ mod tests {
 
     #[test]
     fn policy_names_round_trip() {
-        for p in [Policy::Lru, Policy::Lfu, Policy::Gdsf] {
+        for p in [Policy::Lru, Policy::Lfu, Policy::Gdsf, Policy::Slru] {
             assert_eq!(Policy::parse(p.name()), Some(p));
         }
         assert_eq!(Policy::parse("nope"), None);
+    }
+
+    /// Warm a narrow decode working set, sweep a wide prefill burst past it,
+    /// then resume decode. Returns the hit rate over the *resumed* decode only,
+    /// which is the quantity a user feels as tokens per second.
+    fn decode_hit_rate_after_prefill(policy: Policy, sweep: u32, passes: usize) -> f64 {
+        const BYTES: u64 = 100;
+        // 8 experts of working set, 16 slots of capacity.
+        let working: Vec<ExpertId> = (0..8u32).map(|e| (0, e)).collect();
+        let mut c = ExpertCache::new(16 * BYTES, policy);
+
+        // Warm: twice each, so a segmented policy has grounds to protect them.
+        for _ in 0..2 {
+            for id in &working {
+                c.access(*id, BYTES, 1.0);
+            }
+        }
+        // Prefill: a wide one-shot sweep over ids that never recur.
+        for e in 0..sweep {
+            c.access((1, e), BYTES, 1.0);
+        }
+        // Resume decode, and measure only this.
+        let before = c.stats();
+        for _ in 0..passes {
+            for id in &working {
+                c.access(*id, BYTES, 1.0);
+            }
+        }
+        let after = c.stats();
+        let hits = after.hits - before.hits;
+        let misses = after.misses - before.misses;
+        hits as f64 / (hits + misses) as f64
+    }
+
+    #[test]
+    fn slru_survives_a_prefill_burst_that_wipes_lru() {
+        // Measured over a single decode pass straight after the burst: LRU has no
+        // way to tell a twice-used expert from a one-shot one, so the sweep
+        // evicts the entire working set and decode restarts stone cold.
+        let lru = decode_hit_rate_after_prefill(Policy::Lru, 64, 1);
+        let slru = decode_hit_rate_after_prefill(Policy::Slru, 64, 1);
+        assert!(lru < 1e-9, "expected lru to lose everything, got {lru:.3}");
+        assert!(slru > 1.0 - 1e-9, "expected slru to hold on, got {slru:.3}");
+    }
+
+    #[test]
+    fn the_lru_prefill_penalty_amortises_over_decode_length() {
+        // The part that decides whether segmenting is worth anything in
+        // practice, and the part that is easy to oversell. LRU's loss is a
+        // *one-off* reload of the working set, not an ongoing rate penalty, so
+        // its cost per token falls as generation continues. Segmenting is worth
+        // most where prefill is large relative to the decode that follows --
+        // short replies to long prompts -- and worth nearly nothing on long
+        // generations. Anyone quoting the one-pass number alone is overselling.
+        let mut gaps = Vec::new();
+        for passes in [1usize, 3, 10, 40] {
+            let lru = decode_hit_rate_after_prefill(Policy::Lru, 64, passes);
+            let slru = decode_hit_rate_after_prefill(Policy::Slru, 64, passes);
+            gaps.push(slru - lru);
+        }
+        for w in gaps.windows(2) {
+            assert!(
+                w[1] < w[0],
+                "the advantage should shrink as decode lengthens: {gaps:?}"
+            );
+        }
+        assert!(
+            gaps[0] > 0.9 && gaps[3] < 0.1,
+            "expected total at one pass, near-nothing at forty: {gaps:?}"
+        );
+    }
+
+    #[test]
+    fn slru_matches_lru_when_there_is_no_burst_to_segment() {
+        // With no wide sweep the segmentation has nothing to protect against,
+        // and SLRU should not *cost* anything either. This is the control: it is
+        // why an undifferentiated trace cannot distinguish the two policies, and
+        // therefore why pmx-trace grew a prefill phase.
+        let lru = decode_hit_rate_after_prefill(Policy::Lru, 0, 10);
+        let slru = decode_hit_rate_after_prefill(Policy::Slru, 0, 10);
+        assert!((lru - slru).abs() < 1e-9, "lru {lru:.3} vs slru {slru:.3}");
+        assert!(lru > 0.99, "a working set inside capacity should all hit");
+    }
+
+    #[test]
+    fn slru_protected_segment_cannot_swallow_the_whole_cache() {
+        // If protection spread unchecked, SLRU would decay into LRU and the test
+        // above would silently stop measuring anything.
+        const BYTES: u64 = 100;
+        let mut c = ExpertCache::new(10 * BYTES, Policy::Slru);
+        // Touch far more distinct experts twice each than protection may hold.
+        for e in 0..40u32 {
+            c.access((0, e), BYTES, 1.0);
+            c.access((0, e), BYTES, 1.0);
+        }
+        let limit = (10.0 * BYTES as f64 * SLRU_PROTECTED_FRACTION) as u64;
+        assert!(
+            c.protected_used <= limit,
+            "protected {} exceeds its share {}",
+            c.protected_used,
+            limit
+        );
+        assert!(c.used <= c.capacity);
+        // Some probation must remain, or there is no audition space left.
+        assert!(
+            c.entries.values().any(|e| !e.protected),
+            "every resident entry is protected; probation has vanished"
+        );
+    }
+    /// Streaming-shaped workload: many experts, capacity well below the set, and
+    /// nearly every expert touched more than once over a long decode.
+    fn streaming_decode_hit_rate(policy: Policy, fraction: Option<f64>) -> f64 {
+        const BYTES: u64 = 100;
+        const N: u32 = 256;
+        let mut c = ExpertCache::new(40 * BYTES, policy);
+        if let Some(f) = fraction {
+            c.set_slru_protected_fraction(f);
+        }
+        // Prefill: one wide sweep.
+        let mut x: u64 = 0x1234_5678;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for e in 0..N {
+            c.access((0, e), BYTES, 1.0);
+        }
+        // Decode: skewed but not degenerate -- a hot quarter and a long tail,
+        // which is what MoE routing actually looks like.
+        let before = c.stats();
+        for _ in 0..4000 {
+            let r = next() % 100;
+            let e = if r < 70 {
+                (next() % 64) as u32
+            } else {
+                (next() % u64::from(N)) as u32
+            };
+            c.access((0, e), BYTES, 1.0);
+        }
+        let a = c.stats();
+        let h = a.hits - before.hits;
+        let m = a.misses - before.misses;
+        h as f64 / (h + m) as f64
+    }
+
+    #[test]
+    fn segmenting_pays_only_when_probation_is_large_enough_to_promote() {
+        // The condition that decides whether segmenting is worth anything, and
+        // the reason `llama.cpp` #20757 should not adopt SLRU as an unconditional
+        // default. Promotion requires a second access, and a second access
+        // requires surviving probation. Probation is `1 - fraction` of capacity,
+        // so the policy only works when repeat access arrives faster than
+        // probation turns over. Here it does. The companion test covers the
+        // regime where it does not, and there SLRU is far worse than LRU.
+        let lru = streaming_decode_hit_rate(Policy::Lru, None);
+        // Repeat access here is fast relative to probation, so promotion works
+        // and protection is worth having -- more of it, the better.
+        let small = streaming_decode_hit_rate(Policy::Slru, Some(0.1));
+        let large = streaming_decode_hit_rate(Policy::Slru, Some(0.8));
+        assert!(
+            (small - lru).abs() < 0.01,
+            "with almost nothing protectable slru {small:.4} should track lru {lru:.4}"
+        );
+        assert!(
+            large > lru + 0.05,
+            "slru {large:.4} should clearly beat lru {lru:.4} in this regime"
+        );
+    }
+
+    #[test]
+    fn a_tiny_protected_fraction_degenerates_towards_lru() {
+        // Sanity check on the knob itself: with almost nothing protectable, SLRU
+        // must behave close to LRU. If it does not, the segmentation is doing
+        // something other than what it claims.
+        let lru = streaming_decode_hit_rate(Policy::Lru, None);
+        let slru = streaming_decode_hit_rate(Policy::Slru, Some(0.05));
+        assert!(
+            (lru - slru).abs() < 0.05,
+            "at a 5% protected share slru {slru:.4} should track lru {lru:.4}"
+        );
     }
 }

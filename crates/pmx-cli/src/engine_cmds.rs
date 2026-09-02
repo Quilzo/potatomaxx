@@ -416,7 +416,7 @@ pub fn bench(
             "configuration", "policy", "hit rate", "bytes/token", "req/token", "tok/s"
         );
         let mut rows: Vec<(String, f64)> = Vec::new();
-        for pol in [Policy::Lru, Policy::Gdsf] {
+        for pol in [Policy::Lru, Policy::Slru, Policy::Gdsf] {
             for pred in [None, Some(Predictor::Sticky), Some(Predictor::StickyMarkov)] {
                 let r = replay(&s, &t, &mk(pred, pol));
                 let label = pred.map(|p| p.name()).unwrap_or("on-demand");
